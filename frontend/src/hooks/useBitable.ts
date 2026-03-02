@@ -8,7 +8,7 @@ const FIELD_MAPPING = {
   sender: { name: '发件人', type: FieldType.Text },
   receiver: { name: '收件人', type: FieldType.Text },
   date: { name: '发件时间', type: FieldType.DateTime },
-  body: { name: '邮件内容', type: FieldType.MultiLineText },
+  body: { name: '邮件内容', type: FieldType.Text },
   message_id: { name: '邮件ID', type: FieldType.Text }
 }
 
@@ -42,17 +42,27 @@ export function useBitable() {
     const existingFields = await table.getFieldList()
     const fieldMap: Record<string, IField> = {}
 
-    for (const [key, config] of Object.entries(FIELD_MAPPING)) {
-      const existing = existingFields.find(f => f.name === config.name)
-      if (existing) {
-        fieldMap[key] = existing
+    for (const [key, { name, type }] of Object.entries(FIELD_MAPPING)) {
+      // 需要异步获取字段名称
+      let foundField: IField | undefined
+      for (const field of existingFields) {
+        const fieldName = await field.getName()
+        if (fieldName === name) {
+          foundField = field
+          break
+        }
+      }
+
+      if (foundField) {
+        fieldMap[key] = foundField
       } else {
-        // 创建新字段
-        const newField = await table.addField({
-          name: config.name,
-          type: config.type,
-          property: {}
-        })
+        // 创建新字段 - 使用类型断言避免复杂的类型推断问题
+        const newFieldId = await table.addField({
+          name,
+          type,
+        } as any)
+        // 获取新创建的字段
+        const newField = await table.getField(newFieldId)
         fieldMap[key] = newField
       }
     }
