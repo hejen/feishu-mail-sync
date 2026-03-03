@@ -9,26 +9,93 @@ const FIELD_MAPPING = {
   receiver: { name: '收件人', type: FieldType.Text },
   date: { name: '发件时间', type: FieldType.DateTime },
   body: { name: '邮件内容', type: FieldType.Text },
-  message_id: { name: '邮件ID', type: FieldType.Text }
+  message_id: { name: '邮件ID', type: FieldType.Text },
+  attachments: { name: '附件', type: FieldType.Attachment }
+}
+
+// 检测是否在飞书环境中
+async function checkFeishuEnv(): Promise<boolean> {
+  try {
+    // 检查是否在 iframe 中
+    if (window === window.top) {
+      console.log('[Bitable] 不在 iframe 中，使用模拟模式')
+      return false
+    }
+
+    // 尝试调用 bitable SDK 来验证是否在飞书环境中
+    // bitable 是通过 ES 模块导入的，不是全局变量
+    const table = await bitable.base.getActiveTable()
+    console.log('[Bitable] 飞书环境检测成功，表格:', table)
+    return true
+  } catch (err) {
+    console.log('[Bitable] 飞书环境检测失败:', err)
+    return false
+  }
+}
+
+// 模拟表格类 - 用于本地开发
+class MockTable {
+  private records: any[] = []
+
+  async getFieldList(): Promise<any[]> {
+    return Object.entries(FIELD_MAPPING).map(([key, { name, type }]) => ({
+      id: key,
+      name,
+      type,
+      getName: async () => name
+    }))
+  }
+
+  async addField(config: any): Promise<string> {
+    return config.name
+  }
+
+  async getField(id: string): Promise<any> {
+    return { id, getName: async () => id }
+  }
+
+  async addRecord(record: any): Promise<void> {
+    this.records.push(record)
+    console.log('[Mock] 模拟写入邮件记录:', record)
+  }
+
+  getRecordCount(): number {
+    return this.records.length
+  }
 }
 
 export function useBitable() {
-  const [table, setTable] = useState<ITable | null>(null)
+  const [table, setTable] = useState<ITable | MockTable | null>(null)
   const [fields, setFields] = useState<IField[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [isMockMode, setIsMockMode] = useState(false)
 
   // 初始化表格
   useEffect(() => {
     async function initTable() {
-      try {
-        const activeTable = await bitable.base.getActiveTable()
-        setTable(activeTable)
-        const fieldList = await activeTable.getFieldList()
-        setFields(fieldList)
-        setLoading(false)
-      } catch (err) {
-        setError(err instanceof Error ? err.message : '初始化表格失败')
+      // 检测是否在飞书环境中（异步检测）
+      const isFeishuEnv = await checkFeishuEnv()
+
+      if (isFeishuEnv) {
+        try {
+          const activeTable = await bitable.base.getActiveTable()
+          setTable(activeTable)
+          const fieldList = await activeTable.getFieldList()
+          setFields(fieldList)
+          setLoading(false)
+          console.log('[Bitable] 飞书环境初始化成功')
+        } catch (err) {
+          setError(err instanceof Error ? err.message : '初始化表格失败')
+          setLoading(false)
+          console.error('[Bitable] 飞书环境初始化失败:', err)
+        }
+      } else {
+        // 本地开发模式 - 使用模拟表格
+        console.log('[Mock] 本地开发模式：使用模拟 Bitable')
+        const mockTable = new MockTable()
+        setTable(mockTable as unknown as ITable)
+        setIsMockMode(true)
         setLoading(false)
       }
     }
@@ -98,6 +165,17 @@ export function useBitable() {
         }
       }
 
+      // 如果是模拟模式，在结果中标注
+      if (isMockMode) {
+        return {
+          success: true,
+          count: successCount,
+          total: emails.length,
+          isMockMode: true,
+          message: '(本地模拟模式)'
+        }
+      }
+
       return { success: true, count: successCount, total: emails.length }
     } catch (err) {
       return {
@@ -105,7 +183,7 @@ export function useBitable() {
         message: err instanceof Error ? err.message : '写入失败'
       }
     }
-  }, [table, ensureFields])
+  }, [table, ensureFields, isMockMode])
 
   return {
     table,
@@ -113,6 +191,7 @@ export function useBitable() {
     loading,
     error,
     ensureFields,
-    writeEmails
+    writeEmails,
+    isMockMode
   }
 }
