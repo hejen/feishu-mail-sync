@@ -178,19 +178,38 @@ export function useBitable() {
 
       for (const email of emails) {
         try {
-          // 处理附件 - 直接使用 File 对象，SDK 会自动上传
-          let attachmentFiles: File[] = []
+          // 处理附件 - 上传并构建 IOpenAttachment 对象
+          let attachmentsData: Array<{
+            name: string
+            size: number
+            type: string
+            token: string
+            timeStamp: number
+          }> = []
 
           if (email.attachments && email.attachments.length > 0 && !isMockMode) {
             try {
               // 将所有附件转换为 File 对象
-              attachmentFiles = email.attachments.map(attachment => {
+              const files: File[] = email.attachments.map(attachment => {
                 const blob = base64ToBlob(attachment.content, attachment.filename)
                 return new File([blob], attachment.filename, { type: blob.type })
               })
-              console.log('[Bitable] 准备上传附件:', attachmentFiles.map(f => f.name))
+              console.log('[Bitable] 准备上传附件:', files.map(f => f.name))
+
+              // 使用飞书 SDK 批量上传附件，获取 fileToken
+              const fileTokens = await bitable.base.batchUploadFile(files)
+              console.log('[Bitable] 上传成功，tokens:', fileTokens)
+
+              // 构建 IOpenAttachment 对象数组
+              attachmentsData = files.map((file, index) => ({
+                name: file.name,
+                size: file.size,
+                type: file.type,
+                token: fileTokens[index],
+                timeStamp: Date.now()
+              }))
             } catch (attachErr) {
-              console.error('处理附件失败:', attachErr)
+              console.error('上传附件失败:', attachErr)
               // 继续处理，不中断流程
             }
           }
@@ -206,7 +225,7 @@ export function useBitable() {
               [fieldMap['date'].id]: dateTimestamp,
               [fieldMap['body'].id]: email.body,
               [fieldMap['message_id'].id]: email.message_id,
-              [fieldMap['attachments'].id]: attachmentFiles
+              [fieldMap['attachments'].id]: attachmentsData
             }
           })
           successCount++
