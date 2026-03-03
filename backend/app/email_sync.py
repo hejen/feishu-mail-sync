@@ -81,18 +81,25 @@ class EmailSyncService:
             finally:
                 db.close()
 
-            # 遍历邮件
+            # 遍历所有邮件，收集未同步的
+            all_emails = []
             for email_id in email_ids:
-                # 如果已达到限制条数，停止获取
-                if limit and len(emails) >= limit:
-                    break
                 try:
                     email_data = self._parse_email(email_id)
                     if email_data and email_data["message_id"] not in synced_ids:
-                        emails.append(email_data)
+                        all_emails.append(email_data)
                 except Exception as e:
                     logger.warning(f"解析邮件失败: {str(e)}")
                     continue
+
+            # 按日期降序排序（最新的在前）
+            all_emails.sort(key=lambda x: x.get("date", ""), reverse=True)
+
+            # 应用限制
+            if limit:
+                emails = all_emails[:limit]
+            else:
+                emails = all_emails
 
             return emails, f"成功获取 {len(emails)} 封新邮件"
 
