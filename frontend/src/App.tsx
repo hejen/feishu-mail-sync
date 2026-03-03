@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { ConfigProvider, Button, message, Space } from 'antd'
+import { ConfigProvider, Button, message, Space, InputNumber } from 'antd'
 import { PlusOutlined, SyncOutlined } from '@ant-design/icons'
 import zhCN from 'antd/locale/zh_CN'
 
@@ -23,6 +23,10 @@ function App() {
   const [modalVisible, setModalVisible] = useState(false)
   const [autoSync, setAutoSync] = useState(false)
   const [syncInterval, setSyncInterval] = useState(30)
+  const [syncLimit, setSyncLimit] = useState(() => {
+    const saved = localStorage.getItem('syncLimit')
+    return saved ? parseInt(saved) : 100
+  })
 
   const { writeEmails } = useBitable()
 
@@ -75,7 +79,8 @@ function App() {
       if (emailsRes.data.length > 0) {
         const result = await writeEmails(emailsRes.data)
         if (result.success) {
-          message.success(`已写入 ${result.count} 封邮件到多维表格`)
+          const mockHint = (result as any).isMockMode ? ' (本地模拟模式)' : ''
+          message.success(`已写入 ${result.count} 封邮件到多维表格${mockHint}`)
         } else {
           message.error(result.message || '写入多维表格失败')
         }
@@ -97,6 +102,19 @@ function App() {
     try {
       const res = await api.manualSyncAccount(id)
       message.success(res.data.message)
+
+      // 获取同步的邮件并写入多维表格
+      const emailsRes = await api.getSyncedEmails()
+      if (emailsRes.data.length > 0) {
+        const result = await writeEmails(emailsRes.data)
+        if (result.success) {
+          const mockHint = (result as any).isMockMode ? ' (本地模拟模式)' : ''
+          message.success(`已写入 ${result.count} 封邮件到多维表格${mockHint}`)
+        } else {
+          message.error(result.message || '写入多维表格失败')
+        }
+      }
+
       loadData()
     } catch (err: any) {
       message.error(err.response?.data?.detail || '同步失败')
@@ -128,6 +146,13 @@ function App() {
     }
   }
 
+  // 处理同步条数变更
+  const handleSyncLimitChange = (value: number | null) => {
+    const limit = Math.max(1, Math.min(99999, value || 100))
+    setSyncLimit(limit)
+    localStorage.setItem('syncLimit', String(limit))
+  }
+
   return (
     <ConfigProvider locale={zhCN}>
       <div style={{ padding: 16, maxWidth: 400, margin: '0 auto' }}>
@@ -149,6 +174,18 @@ function App() {
           onAutoSyncChange={setAutoSync}
           onIntervalChange={setSyncInterval}
         />
+
+        <div style={{ marginBottom: 16 }}>
+          <label style={{ display: 'block', marginBottom: 8 }}>每次同步条数</label>
+          <InputNumber
+            min={1}
+            max={99999}
+            value={syncLimit}
+            onChange={handleSyncLimitChange}
+            style={{ width: '100%' }}
+            placeholder="1-99999"
+          />
+        </div>
 
         <Space style={{ width: '100%', marginBottom: 16 }}>
           <Button
