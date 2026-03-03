@@ -178,24 +178,19 @@ export function useBitable() {
 
       for (const email of emails) {
         try {
-          // 处理附件上传
-          let attachmentTokens: { file_token: string }[] = []
+          // 处理附件 - 直接使用 File 对象，SDK 会自动上传
+          let attachmentFiles: File[] = []
 
           if (email.attachments && email.attachments.length > 0 && !isMockMode) {
             try {
               // 将所有附件转换为 File 对象
-              const files: File[] = email.attachments.map(attachment => {
+              attachmentFiles = email.attachments.map(attachment => {
                 const blob = base64ToBlob(attachment.content, attachment.filename)
                 return new File([blob], attachment.filename, { type: blob.type })
               })
-
-              // 使用飞书 SDK 批量上传附件
-              const fileTokens = await bitable.base.batchUploadFile(files)
-
-              // 将 file_token 转换为附件字段需要的格式
-              attachmentTokens = fileTokens.map(token => ({ file_token: token }))
-            } catch (uploadErr) {
-              console.error('上传附件失败:', uploadErr)
+              console.log('[Bitable] 准备上传附件:', attachmentFiles.map(f => f.name))
+            } catch (attachErr) {
+              console.error('处理附件失败:', attachErr)
               // 继续处理，不中断流程
             }
           }
@@ -211,7 +206,7 @@ export function useBitable() {
               [fieldMap['date'].id]: dateTimestamp,
               [fieldMap['body'].id]: email.body,
               [fieldMap['message_id'].id]: email.message_id,
-              [fieldMap['attachments'].id]: attachmentTokens
+              [fieldMap['attachments'].id]: attachmentFiles
             }
           })
           successCount++
