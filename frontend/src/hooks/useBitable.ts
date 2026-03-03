@@ -13,6 +13,35 @@ const FIELD_MAPPING = {
   attachments: { name: '附件', type: FieldType.Attachment }
 }
 
+// 将 base64 字符串转换为 Blob
+function base64ToBlob(base64: string, filename: string): Blob {
+  const byteCharacters = atob(base64)
+  const byteNumbers = new Array(byteCharacters.length)
+  for (let i = 0; i < byteCharacters.length; i++) {
+    byteNumbers[i] = byteCharacters.charCodeAt(i)
+  }
+  const byteArray = new Uint8Array(byteNumbers)
+
+  // 根据文件扩展名推断 MIME 类型
+  const ext = filename.split('.').pop()?.toLowerCase() || ''
+  const mimeTypes: Record<string, string> = {
+    'pdf': 'application/pdf',
+    'doc': 'application/msword',
+    'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'xls': 'application/vnd.ms-excel',
+    'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'png': 'image/png',
+    'jpg': 'image/jpeg',
+    'jpeg': 'image/jpeg',
+    'gif': 'image/gif',
+    'txt': 'text/plain',
+    'zip': 'application/zip'
+  }
+  const mimeType = mimeTypes[ext] || 'application/octet-stream'
+
+  return new Blob([byteArray], { type: mimeType })
+}
+
 // 检测是否在飞书环境中
 async function checkFeishuEnv(): Promise<boolean> {
   try {
@@ -149,6 +178,28 @@ export function useBitable() {
 
       for (const email of emails) {
         try {
+          // 处理附件上传
+          let attachmentTokens: { file_token: string }[] = []
+
+          if (email.attachments && email.attachments.length > 0 && !isMockMode) {
+            try {
+              // 将所有附件转换为 File 对象
+              const files: File[] = email.attachments.map(attachment => {
+                const blob = base64ToBlob(attachment.content, attachment.filename)
+                return new File([blob], attachment.filename, { type: blob.type })
+              })
+
+              // 使用飞书 SDK 批量上传附件
+              const fileTokens = await bitable.base.batchUploadFile(files)
+
+              // 将 file_token 转换为附件字段需要的格式
+              attachmentTokens = fileTokens.map(token => ({ file_token: token }))
+            } catch (uploadErr) {
+              console.error('上传附件失败:', uploadErr)
+              // 继续处理，不中断流程
+            }
+          }
+
           await table.addRecord({
             fields: {
               [fieldMap['subject'].id]: email.subject,
@@ -156,7 +207,8 @@ export function useBitable() {
               [fieldMap['receiver'].id]: email.receiver,
               [fieldMap['date'].id]: email.date,
               [fieldMap['body'].id]: email.body,
-              [fieldMap['message_id'].id]: email.message_id
+              [fieldMap['message_id'].id]: email.message_id,
+              [fieldMap['attachments'].id]: attachmentTokens
             }
           })
           successCount++
