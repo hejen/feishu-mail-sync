@@ -200,12 +200,15 @@ export function useBitable() {
             }
           }
 
+          // 将 ISO 日期字符串转换为毫秒时间戳（飞书 DateTime 字段要求）
+          const dateTimestamp = email.date ? new Date(email.date).getTime() : null
+
           await table.addRecord({
             fields: {
               [fieldMap['subject'].id]: email.subject,
               [fieldMap['sender'].id]: email.sender,
               [fieldMap['receiver'].id]: email.receiver,
-              [fieldMap['date'].id]: email.date,
+              [fieldMap['date'].id]: dateTimestamp,
               [fieldMap['body'].id]: email.body,
               [fieldMap['message_id'].id]: email.message_id,
               [fieldMap['attachments'].id]: attachmentTokens
