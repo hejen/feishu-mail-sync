@@ -137,10 +137,13 @@ class EmailSyncService:
                     if filename:
                         filename = self._decode_header(filename)
                         content = part.get_payload(decode=True)
-                        attachments.append({
-                            "filename": filename,
-                            "content": base64.b64encode(content).decode('utf-8')  # 显式转为字符串
-                        })
+                        if content is not None:
+                            attachments.append({
+                                "filename": filename,
+                                "content": base64.b64encode(content).decode('utf-8')
+                            })
+                        else:
+                            logger.warning(f"无法读取附件内容: {filename}")
                 elif content_type == "text/plain" and not body:
                     # 纯文本正文
                     try:
