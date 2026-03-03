@@ -5,7 +5,6 @@ import zhCN from 'antd/locale/zh_CN'
 
 import { StatusPanel } from './components/StatusPanel'
 import { AccountList } from './components/AccountList'
-import { SyncSettings } from './components/SyncSettings'
 import { SyncLogs } from './components/SyncLogs'
 import { AddAccountModal } from './components/AddAccountModal'
 import { useBitable } from './hooks/useBitable'
@@ -21,8 +20,6 @@ function App() {
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
   const [modalVisible, setModalVisible] = useState(false)
-  const [autoSync, setAutoSync] = useState(false)
-  const [syncInterval, setSyncInterval] = useState(30)
   const [syncLimit, setSyncLimit] = useState(() => {
     const saved = localStorage.getItem('syncLimit')
     return saved ? parseInt(saved) : 100
@@ -41,7 +38,7 @@ function App() {
       ])
       setAccounts(accountsRes.data)
       setSyncStatus(statusRes.data)
-      setSyncLogs(logsRes.data)
+      setSyncLogs(logsRes.data.slice(0, 10))
       setProviders(providersRes.data)
     } catch (err) {
       message.error('加载数据失败')
@@ -53,17 +50,6 @@ function App() {
   useEffect(() => {
     loadData()
   }, [loadData])
-
-  // 自动同步
-  useEffect(() => {
-    if (!autoSync) return
-
-    const interval = setInterval(() => {
-      handleSyncAll()
-    }, syncInterval * 60 * 1000)
-
-    return () => clearInterval(interval)
-  }, [autoSync, syncInterval])
 
   // 同步所有账户
   const handleSyncAll = async () => {
@@ -168,12 +154,13 @@ function App() {
           onDelete={handleDeleteAccount}
         />
 
-        <SyncSettings
+        {/* 暂时隐藏同步设置 */}
+        {/* <SyncSettings
           autoSync={autoSync}
           syncInterval={syncInterval}
           onAutoSyncChange={setAutoSync}
           onIntervalChange={setSyncInterval}
-        />
+        /> */}
 
         <div style={{ marginBottom: 16 }}>
           <label style={{ display: 'block', marginBottom: 8 }}>每次同步条数</label>
