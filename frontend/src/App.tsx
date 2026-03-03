@@ -57,7 +57,7 @@ function App() {
 
     setSyncing(true)
     try {
-      const res = await api.manualSync()
+      const res = await api.manualSync(syncLimit)
       message.success(res.data.message)
 
       // 获取同步的邮件并写入多维表格
@@ -86,7 +86,7 @@ function App() {
 
     setSyncing(true)
     try {
-      const res = await api.manualSyncAccount(id)
+      const res = await api.manualSyncAccount(id, syncLimit)
       message.success(res.data.message)
 
       // 获取同步的邮件并写入多维表格

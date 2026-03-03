@@ -16,7 +16,7 @@ sync_status = {
 
 
 @router.post("/manual", response_model=MessageResponse)
-async def manual_sync(db: Session = Depends(get_db)):
+async def manual_sync(limit: int = None, db: Session = Depends(get_db)):
     """手动触发同步所有账户"""
     if sync_status["is_syncing"]:
         raise HTTPException(status_code=400, detail="正在同步中，请稍候")
@@ -31,7 +31,7 @@ async def manual_sync(db: Session = Depends(get_db)):
         errors = []
 
         for account in accounts:
-            result = sync_account(account.id)
+            result = sync_account(account.id, limit=limit)
 
             if result["success"]:
                 total_synced += result["emails_count"]
@@ -53,23 +53,31 @@ async def manual_sync(db: Session = Depends(get_db)):
 
 
 @router.post("/manual/{account_id}", response_model=MessageResponse)
-async def manual_sync_account(account_id: int, db: Session = Depends(get_db)):
+async def manual_sync_account(account_id: int, limit: int = None, db: Session = Depends(get_db)):
     """手动同步单个账户"""
     if sync_status["is_syncing"]:
         raise HTTPException(status_code=400, detail="正在同步中，请稍候")
 
-    account = db.query(EmailAccount).filter(EmailAccount.id == account_id).first()
-    if not account:
-        raise HTTPException(status_code=404, detail="账户不存在")
+    sync_status["is_syncing"] = True
+    sync_status["current_emails"] = []
 
-    result = sync_account(account_id)
+    try:
+        account = db.query(EmailAccount).filter(EmailAccount.id == account_id).first()
+        if not account:
+            raise HTTPException(status_code=404, detail="账户不存在")
 
-    if result["success"]:
-        log_sync(account_id, result["emails_count"], "success")
-        return MessageResponse(message=f"同步完成，{result['emails_count']} 封新邮件")
-    else:
-        log_sync(account_id, 0, "failed", result["error"])
-        raise HTTPException(status_code=500, detail=result["error"])
+        result = sync_account(account_id, limit=limit)
+
+        if result["success"]:
+            # 将邮件存储到内存中供前端获取
+            sync_status["current_emails"] = result.get("emails", [])
+            log_sync(account_id, result["emails_count"], "success")
+            return MessageResponse(message=f"同步完成，{result['emails_count']} 封新邮件")
+        else:
+            log_sync(account_id, 0, "failed", result["error"])
+            raise HTTPException(status_code=500, detail=result["error"])
+    finally:
+        sync_status["is_syncing"] = False
 
 
 @router.get("/status", response_model=SyncStatus)

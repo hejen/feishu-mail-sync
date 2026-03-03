@@ -52,7 +52,7 @@ class EmailSyncService:
                 pass
             self.imap = None
 
-    def fetch_emails(self, days: int = 30) -> Tuple[List[Dict], str]:
+    def fetch_emails(self, days: int = 30, limit: int = None) -> Tuple[List[Dict], str]:
         """获取邮件列表"""
         emails = []
         try:
@@ -83,6 +83,9 @@ class EmailSyncService:
 
             # 遍历邮件
             for email_id in email_ids:
+                # 如果已达到限制条数，停止获取
+                if limit and len(emails) >= limit:
+                    break
                 try:
                     email_data = self._parse_email(email_id)
                     if email_data and email_data["message_id"] not in synced_ids:
@@ -181,7 +184,7 @@ class EmailSyncService:
             return header
 
 
-def sync_account(account_id: int, days: int = None) -> Dict:
+def sync_account(account_id: int, days: int = None, limit: int = None) -> Dict:
     """同步单个邮箱账户"""
     db = SessionLocal()
     result = {
@@ -218,7 +221,7 @@ def sync_account(account_id: int, days: int = None) -> Dict:
 
         # 获取邮件
         days = days or settings.default_sync_days
-        emails, msg = sync_service.fetch_emails(days)
+        emails, msg = sync_service.fetch_emails(days, limit)
         result["emails_count"] = len(emails)
 
         # 更新同步时间
