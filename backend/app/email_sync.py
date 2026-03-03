@@ -1,5 +1,6 @@
 import imaplib
 import email
+import base64
 from email.header import decode_header
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Tuple
@@ -131,13 +132,14 @@ class EmailSyncService:
                 content_disposition = str(part.get("Content-Disposition", ""))
 
                 if "attachment" in content_disposition:
-                    # 附件
+                    # 附件 - 读取内容并转为 base64
                     filename = part.get_filename()
                     if filename:
                         filename = self._decode_header(filename)
+                        content = part.get_payload(decode=True)
                         attachments.append({
                             "filename": filename,
-                            "content": part.get_payload(decode=True)
+                            "content": base64.b64encode(content).decode('utf-8')  # 显式转为字符串
                         })
                 elif content_type == "text/plain" and not body:
                     # 纯文本正文
