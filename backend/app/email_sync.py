@@ -206,6 +206,7 @@ class EmailSyncService:
             try:
                 status, data = self.imap.fetch(id_str, "(BODY.PEEK[HEADER.FIELDS (DATE)])")
                 if status != "OK":
+                    logger.warning(f"IMAP fetch returned non-OK status for batch {i//batch_size + 1}")
                     continue
 
                 # 解析返回数据
@@ -225,8 +226,8 @@ class EmailSyncService:
                                         result[email_id] = datetime.fromtimestamp(
                                             email.utils.mktime_tz(date_tuple)
                                         )
-                                except Exception:
-                                    pass
+                                except Exception as e:
+                                    logger.debug(f"解析日期失败: {date_str}, 错误: {str(e)}")
                                 break
             except Exception as e:
                 logger.warning(f"批量获取日期头失败: {str(e)}")
