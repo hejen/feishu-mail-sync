@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from 'react'
-import { ConfigProvider, Button, message, Space, InputNumber } from 'antd'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { ConfigProvider, Button, message, Space, InputNumber, Progress } from 'antd'
 import { PlusOutlined, SyncOutlined } from '@ant-design/icons'
 import zhCN from 'antd/locale/zh_CN'
 
@@ -10,6 +10,7 @@ import { AddAccountModal } from './components/AddAccountModal'
 import { useBitable } from './hooks/useBitable'
 import * as api from './services/api'
 import type { Account, SyncStatus, SyncLog, Provider } from './types'
+import type { SyncProgress } from './services/api'
 
 function App() {
   // 状态
@@ -24,6 +25,8 @@ function App() {
     const saved = localStorage.getItem('syncLimit')
     return saved ? parseInt(saved) : 100
   })
+  const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null)
+  const progressPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const { writeEmails } = useBitable()
 
@@ -50,6 +53,57 @@ function App() {
   useEffect(() => {
     loadData()
   }, [loadData])
+
+  // 清理进度轮询
+  const clearProgressPoll = useCallback(() => {
+    if (progressPollRef.current) {
+      clearInterval(progressPollRef.current)
+      progressPollRef.current = null
+    }
+  }, [])
+
+  // 开始进度轮询
+  const startProgressPoll = useCallback(() => {
+    clearProgressPoll()
+
+    progressPollRef.current = setInterval(async () => {
+      try {
+        const res = await api.getSyncProgress()
+        setSyncProgress(res.data)
+
+        if (res.data.status === 'completed') {
+          clearProgressPoll()
+          message.success(res.data.message || '同步完成')
+
+          // 获取同步的邮件并写入多维表格
+          const emailsRes = await api.getSyncedEmails()
+          if (emailsRes.data.length > 0) {
+            const result = await writeEmails(emailsRes.data)
+            if (result.success) {
+              const mockHint = (result as any).isMockMode ? ' (本地模拟模式)' : ''
+              message.success(`已写入 ${result.count} 封邮件到多维表格${mockHint}`)
+            } else {
+              message.error(result.message || '写入多维表格失败')
+            }
+          }
+
+          setSyncing(false)
+          loadData()
+        } else if (res.data.status === 'failed') {
+          clearProgressPoll()
+          message.error(res.data.error || res.data.message || '同步失败')
+          setSyncing(false)
+        }
+      } catch (err) {
+        console.error('获取进度失败:', err)
+      }
+    }, 1000)
+  }, [clearProgressPoll, writeEmails, loadData])
+
+  // 组件卸载时清理
+  useEffect(() => {
+    return () => clearProgressPoll()
+  }, [clearProgressPoll])
 
   // 同步所有账户
   const handleSyncAll = async () => {
@@ -80,32 +134,21 @@ function App() {
     }
   }
 
-  // 同步单个账户
+  // 同步单个账户（异步模式）
   const handleSyncAccount = async (id: number) => {
     if (syncing) return
 
     setSyncing(true)
+    setSyncProgress({ total: 0, current: 0, status: 'syncing', message: '启动同步...', error: null })
+
     try {
-      const res = await api.manualSyncAccount(id, syncLimit)
-      message.success(res.data.message)
-
-      // 获取同步的邮件并写入多维表格
-      const emailsRes = await api.getSyncedEmails()
-      if (emailsRes.data.length > 0) {
-        const result = await writeEmails(emailsRes.data)
-        if (result.success) {
-          const mockHint = (result as any).isMockMode ? ' (本地模拟模式)' : ''
-          message.success(`已写入 ${result.count} 封邮件到多维表格${mockHint}`)
-        } else {
-          message.error(result.message || '写入多维表格失败')
-        }
-      }
-
-      loadData()
+      await api.manualSyncAccount(id, syncLimit)
+      message.info('同步任务已启动，请稍候...')
+      startProgressPoll()
     } catch (err: any) {
-      message.error(err.response?.data?.detail || '同步失败')
-    } finally {
       setSyncing(false)
+      setSyncProgress(null)
+      message.error(err.response?.data?.detail || '启动同步失败')
     }
   }
 
@@ -173,6 +216,20 @@ function App() {
             placeholder="1-99999"
           />
         </div>
+
+        {/* 同步进度条 */}
+        {syncing && syncProgress && (
+          <div style={{ marginBottom: 16, padding: 12, background: '#f5f5f5', borderRadius: 6 }}>
+            <div style={{ marginBottom: 8, fontSize: 14 }}>
+              {syncProgress.message || '同步中...'}
+            </div>
+            <Progress
+              percent={syncProgress.total > 0 ? Math.round((syncProgress.current / syncProgress.total) * 100) : 0}
+              status={syncProgress.status === 'failed' ? 'exception' : 'active'}
+              format={() => `${syncProgress.current} / ${syncProgress.total || '?'}`}
+            />
+          </div>
+        )}
 
         <Space style={{ width: '100%', marginBottom: 16 }}>
           <Button
