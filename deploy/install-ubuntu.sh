@@ -82,11 +82,24 @@ install_dependencies() {
     # Python 3
     apt install -y python3 python3-pip python3-venv
 
-    # Node.js (使用 NodeSource)
-    if ! command -v node &> /dev/null; then
-        print_info "安装 Node.js 18.x..."
-        curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
-        apt install -y nodejs
+    # Node.js (使用 NodeSource，强制安装 20.x)
+    print_info "安装 Node.js 20.x..."
+    # 先移除旧版本
+    apt remove -y nodejs 2>/dev/null || true
+    # 安装 Node.js 20.x
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+    apt install -y nodejs
+
+    # 验证版本
+    NODE_VERSION=$(node --version)
+    print_info "Node.js 版本: $NODE_VERSION"
+
+    # 检查版本是否足够新 (需要 14+)
+    MAJOR_VERSION=$(echo $NODE_VERSION | cut -d'v' -f1 | cut -d'.' -f1)
+    if [ "$MAJOR_VERSION" -lt 14 ]; then
+        print_error "Node.js 版本过低: $NODE_VERSION", 需要 14+"
+        print_error "请手动安装更高版本的 Node.js"
+        exit 1
     fi
 
     # Nginx
