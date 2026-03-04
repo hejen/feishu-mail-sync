@@ -57,7 +57,7 @@ class EmailSyncService:
                 pass
             self.imap = None
 
-    def fetch_emails(self, days: int = 30, limit: int = None) -> Tuple[List[Dict], str]:
+    def fetch_emails(self, days: int = 30, limit: int = None, progress_callback=None) -> Tuple[List[Dict], str]:
         """获取邮件列表
 
         优化策略：IMAP 邮件 ID 通常是递增的，新邮件 ID 更大。
@@ -102,6 +102,10 @@ class EmailSyncService:
                 try:
                     email_data = self._parse_email(email_id)
                     checked_count += 1
+
+                    # 更新进度
+                    if progress_callback:
+                        progress_callback(checked_count, len(email_ids))
 
                     if email_data and email_data["message_id"] not in synced_ids:
                         emails.append(email_data)
