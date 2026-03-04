@@ -1,3 +1,5 @@
+import threading
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
@@ -38,6 +40,36 @@ def reset_progress():
         "message": "",
         "error": None
     }
+
+
+def _background_sync(account_id: int, limit: int):
+    """后台同步任务（在线程中执行）"""
+    from app.email_sync import sync_account
+
+    try:
+        sync_status["progress"]["status"] = "syncing"
+        sync_status["progress"]["message"] = "正在连接邮箱..."
+
+        # 执行同步
+        result = sync_account(account_id, limit=limit)
+
+        if result["success"]:
+            sync_status["current_emails"] = result.get("emails", [])
+            sync_status["progress"]["status"] = "completed"
+            sync_status["progress"]["message"] = f"同步完成，共 {result['emails_count']} 封邮件"
+            log_sync(account_id, result["emails_count"], "success")
+        else:
+            sync_status["progress"]["status"] = "failed"
+            sync_status["progress"]["error"] = result["error"]
+            sync_status["progress"]["message"] = f"同步失败: {result['error']}"
+            log_sync(account_id, 0, "failed", result["error"])
+
+    except Exception as e:
+        sync_status["progress"]["status"] = "failed"
+        sync_status["progress"]["error"] = str(e)
+        sync_status["progress"]["message"] = f"同步异常: {str(e)}"
+    finally:
+        sync_status["is_syncing"] = False
 
 
 @router.post("/manual", response_model=MessageResponse)
