@@ -11,8 +11,33 @@ router = APIRouter(prefix="/api/sync", tags=["同步操作"])
 # 同步状态（内存中）
 sync_status = {
     "is_syncing": False,
-    "current_emails": []
+    "current_emails": [],
+    "progress": {
+        "total": 0,
+        "current": 0,
+        "status": "idle",  # idle/syncing/completed/failed
+        "message": "",
+        "error": None
+    }
 }
+
+
+def update_progress(current: int, total: int, message: str = ""):
+    """更新同步进度"""
+    sync_status["progress"]["current"] = current
+    sync_status["progress"]["total"] = total
+    sync_status["progress"]["message"] = message
+
+
+def reset_progress():
+    """重置进度状态"""
+    sync_status["progress"] = {
+        "total": 0,
+        "current": 0,
+        "status": "idle",
+        "message": "",
+        "error": None
+    }
 
 
 @router.post("/manual", response_model=MessageResponse)
