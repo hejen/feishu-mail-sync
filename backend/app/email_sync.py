@@ -190,6 +190,50 @@ class EmailSyncService:
         except:
             return header
 
+    def _fetch_dates(self, email_ids: List[bytes]) -> Dict[bytes, datetime]:
+        """批量获取邮件日期头，返回 {email_id: datetime} 映射"""
+        if not email_ids:
+            return {}
+
+        result = {}
+
+        # 分批处理，避免命令过长（每批 500 个）
+        batch_size = 500
+        for i in range(0, len(email_ids), batch_size):
+            batch = email_ids[i:i + batch_size]
+            id_str = b",".join(batch)
+
+            try:
+                status, data = self.imap.fetch(id_str, "(BODY.PEEK[HEADER.FIELDS (DATE)])")
+                if status != "OK":
+                    continue
+
+                # 解析返回数据
+                for item in data:
+                    if isinstance(item, tuple):
+                        # item 格式: (b'1 (BODY[HEADER.FIELDS (DATE)] {size}', b'Date: ...\r\n\r\n')
+                        header = item[1].decode("utf-8", errors="ignore")
+                        # 提取 Date 行
+                        for line in header.split("\r\n"):
+                            if line.lower().startswith("date:"):
+                                date_str = line[5:].strip()
+                                try:
+                                    date_tuple = email.utils.parsedate_tz(date_str)
+                                    if date_tuple:
+                                        # 使用邮件 ID 作为 key
+                                        email_id = item[0].split()[0]
+                                        result[email_id] = datetime.fromtimestamp(
+                                            email.utils.mktime_tz(date_tuple)
+                                        )
+                                except Exception:
+                                    pass
+                                break
+            except Exception as e:
+                logger.warning(f"批量获取日期头失败: {str(e)}")
+                continue
+
+        return result
+
 
 def sync_account(account_id: int, days: int = None, limit: int = None) -> Dict:
     """同步单个邮箱账户"""
