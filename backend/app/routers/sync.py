@@ -171,6 +171,22 @@ async def get_sync_logs(limit: int = 20, db: Session = Depends(get_db)):
     return logs
 
 
+@router.get("/progress")
+async def get_sync_progress():
+    """获取同步进度
+
+    Returns:
+        {
+            "total": 总邮件数,
+            "current": 已处理数,
+            "status": "idle" | "syncing" | "completed" | "failed",
+            "message": 状态消息,
+            "error": 错误信息（如果有）
+        }
+    """
+    return sync_status["progress"]
+
+
 @router.get("/emails")
 async def get_synced_emails(db: Session = Depends(get_db)):
     """获取已同步的邮件列表（用于前端写入多维表格）
