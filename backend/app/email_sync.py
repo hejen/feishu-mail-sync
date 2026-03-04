@@ -53,7 +53,11 @@ class EmailSyncService:
             self.imap = None
 
     def fetch_emails(self, days: int = 30, limit: int = None) -> Tuple[List[Dict], str]:
-        """获取邮件列表"""
+        """获取邮件列表
+
+        优化策略：IMAP 邮件 ID 通常是递增的，新邮件 ID 更大。
+        因此反向遍历（从最大 ID 开始）可以快速获取最新邮件，无需获取日期头。
+        """
         emails = []
         try:
             # 选择收件箱
@@ -75,15 +79,6 @@ class EmailSyncService:
 
             logger.info(f"找到 {len(email_ids)} 封邮件")
 
-            # 批量获取日期头并按日期降序排序
-            id_date_map = self._fetch_dates(email_ids)
-            sorted_ids = sorted(
-                email_ids,
-                key=lambda eid: id_date_map.get(eid, datetime.min),
-                reverse=True  # 最新的在前
-            )
-            logger.info(f"日期头获取完成，共 {len(id_date_map)} 封")
-
             # 获取已同步的邮件 ID
             db = SessionLocal()
             try:
@@ -95,22 +90,26 @@ class EmailSyncService:
             finally:
                 db.close()
 
-            # 按日期降序遍历，收集未同步邮件
-            for email_id in sorted_ids:
-                # 已达到限制，提前退出
-                if limit and len(emails) >= limit:
-                    logger.info(f"已达到限制 {limit}，停止获取")
-                    break
-
+            # 反向遍历邮件 ID（新邮件 ID 更大，从最大开始遍历）
+            # 这样可以快速获取最新邮件，无需获取日期头
+            checked_count = 0
+            for email_id in reversed(email_ids):
                 try:
                     email_data = self._parse_email(email_id)
+                    checked_count += 1
+
                     if email_data and email_data["message_id"] not in synced_ids:
                         emails.append(email_data)
+                        # 已达到限制，提前退出
+                        if limit and len(emails) >= limit:
+                            logger.info(f"已达到限制 {limit}，检查了 {checked_count} 封邮件后停止")
+                            break
+
                 except Exception as e:
                     logger.warning(f"解析邮件失败: {str(e)}")
                     continue
 
-            return emails, f"成功获取 {len(emails)} 封新邮件"
+            return emails, f"成功获取 {len(emails)} 封新邮件（检查了 {checked_count} 封）"
 
         except Exception as e:
             logger.error(f"获取邮件失败: {str(e)}")
