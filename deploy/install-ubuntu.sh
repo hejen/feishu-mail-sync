@@ -22,8 +22,8 @@ BACKEND_PORT=8000
 # 打印带颜色的消息
 print_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
-print_warning() { echo -e "${YELLOW}[WARNING]${NC} 1"; }
-print_error() { echo -e "${RED}[ERROR]${NC} 1"; }
+print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
+print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # 打印标题
 print_banner() {
@@ -97,7 +97,7 @@ install_dependencies() {
     # 检查版本是否足够新 (需要 14+)
     MAJOR_VERSION=$(echo $NODE_VERSION | cut -d'v' -f1 | cut -d'.' -f1)
     if [ "$MAJOR_VERSION" -lt 14 ]; then
-        print_error "Node.js 版本过低: $NODE_VERSION", 需要 14+"
+        print_error "Node.js 版本过低: $NODE_VERSION, 需要 14+"
         print_error "请手动安装更高版本的 Node.js"
         exit 1
     fi
