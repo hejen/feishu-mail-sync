@@ -1,6 +1,7 @@
 import imaplib
 import email
 import base64
+import mimetypes
 from email.header import decode_header
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Tuple
@@ -12,6 +13,10 @@ from app.database import SessionLocal, EmailAccount, EmailCache, SyncLog
 from app.utils.crypto import decrypt
 
 logger = logging.getLogger(__name__)
+
+# 附件缓存：{message_id: [{filename, size, type, content}, ...]}
+# 用于临时存储附件内容，供前端按需获取
+_attachment_cache: Dict[str, List[Dict]] = {}
 
 
 class EmailSyncService:
@@ -143,22 +148,38 @@ class EmailSyncService:
 
         # 解析正文和附件
         body = ""
-        attachments = []
+        attachment_meta = []  # 只包含元信息，返回给前端
+        attachment_full = []  # 包含完整内容，存入缓存
+
         if msg.is_multipart():
             for part in msg.walk():
                 content_type = part.get_content_type()
                 content_disposition = str(part.get("Content-Disposition", ""))
 
                 if "attachment" in content_disposition:
-                    # 附件 - 读取内容并转为 base64
+                    # 附件 - 读取内容并缓存
                     filename = part.get_filename()
                     if filename:
                         filename = self._decode_header(filename)
                         content = part.get_payload(decode=True)
                         if content is not None:
-                            attachments.append({
+                            # 获取或猜测 MIME 类型
+                            mime_type, _ = mimetypes.guess_type(filename)
+                            if not mime_type:
+                                mime_type = content_type or "application/octet-stream"
+
+                            # 完整附件数据（存入缓存）
+                            attachment_full.append({
                                 "filename": filename,
+                                "size": len(content),
+                                "type": mime_type,
                                 "content": base64.b64encode(content).decode('utf-8')
+                            })
+                            # 元信息（返回给前端）
+                            attachment_meta.append({
+                                "filename": filename,
+                                "size": len(content),
+                                "type": mime_type
                             })
                         else:
                             logger.warning(f"无法读取附件内容: {filename}")
@@ -172,6 +193,10 @@ class EmailSyncService:
                     except:
                         body = ""
 
+        # 缓存附件内容（按 message_id）
+        if attachment_full:
+            _attachment_cache[message_id] = attachment_full
+
         return {
             "message_id": message_id,
             "subject": subject,
@@ -179,7 +204,7 @@ class EmailSyncService:
             "receiver": receiver,
             "date": date,
             "body": body[:5000],  # 限制正文长度
-            "attachments": attachments
+            "attachments": attachment_meta  # 只返回元信息
         }
 
     def _decode_header(self, header: str) -> str:
@@ -319,3 +344,27 @@ def log_sync(account_id: int, emails_count: int, status: str, error_message: str
         db.commit()
     finally:
         db.close()
+
+
+def get_cached_attachment(message_id: str, index: int) -> Optional[Dict]:
+    """从缓存获取单个附件
+
+    Args:
+        message_id: 邮件 Message-ID
+        index: 附件索引（从 0 开始）
+
+    Returns:
+        附件信息（包含 content），如果不存在返回 None
+    """
+    attachments = _attachment_cache.get(message_id)
+    if not attachments:
+        return None
+    if index < 0 or index >= len(attachments):
+        return None
+    return attachments[index]
+
+
+def clear_attachment_cache():
+    """清空附件缓存"""
+    global _attachment_cache
+    _attachment_cache = {}

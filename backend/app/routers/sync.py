@@ -4,7 +4,7 @@ from typing import List
 
 from app.database import get_db, EmailAccount, SyncLog
 from app.models.schemas import SyncStatus, SyncLogResponse, MessageResponse
-from app.email_sync import sync_account, log_sync
+from app.email_sync import sync_account, log_sync, get_cached_attachment, clear_attachment_cache
 
 router = APIRouter(prefix="/api/sync", tags=["同步操作"])
 
@@ -23,6 +23,7 @@ async def manual_sync(limit: int = None, db: Session = Depends(get_db)):
 
     sync_status["is_syncing"] = True
     sync_status["current_emails"] = []
+    clear_attachment_cache()  # 清空旧缓存
 
     try:
         accounts = db.query(EmailAccount).filter(EmailAccount.is_active == True).all()
@@ -60,6 +61,7 @@ async def manual_sync_account(account_id: int, limit: int = None, db: Session = 
 
     sync_status["is_syncing"] = True
     sync_status["current_emails"] = []
+    clear_attachment_cache()  # 清空旧缓存
 
     try:
         account = db.query(EmailAccount).filter(EmailAccount.id == account_id).first()
@@ -117,5 +119,29 @@ async def get_sync_logs(limit: int = 20, db: Session = Depends(get_db)):
 
 @router.get("/emails")
 async def get_synced_emails(db: Session = Depends(get_db)):
-    """获取已同步的邮件列表（用于前端写入多维表格）"""
+    """获取已同步的邮件列表（用于前端写入多维表格）
+
+    注意：附件只返回元信息（filename, size, type），不包含 content。
+    需要通过 /api/sync/attachment/{message_id}/{index} 接口按需获取附件内容。
+    """
     return sync_status.get("current_emails", [])
+
+
+@router.get("/attachment/{message_id}/{index}")
+async def get_attachment(message_id: str, index: int):
+    """获取单个附件的内容
+
+    Args:
+        message_id: 邮件的 Message-ID（需要 URL 编码）
+        index: 附件索引（从 0 开始）
+
+    Returns:
+        附件信息，包含 content（base64 编码）
+    """
+    attachment = get_cached_attachment(message_id, index)
+    if not attachment:
+        raise HTTPException(
+            status_code=404,
+            detail=f"附件不存在或已过期（message_id={message_id}, index={index}）"
+        )
+    return attachment

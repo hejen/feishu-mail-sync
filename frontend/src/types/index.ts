@@ -58,7 +58,9 @@ export interface Email {
   body: string
   attachments: Array<{
     filename: string
-    content: string  // base64
+    size: number
+    type: string
+    // content 不再包含在列表中，需要通过 getAttachment API 按需获取
   }>
 }
 

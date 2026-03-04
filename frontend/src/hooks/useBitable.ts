@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { bitable, FieldType, type ITable, type IField } from '@lark-base-open/js-sdk'
 import type { Email } from '../types'
+import { getAttachment } from '../services/api'
 
 // 字段映射配置
 const FIELD_MAPPING = {
@@ -189,25 +190,44 @@ export function useBitable() {
 
           if (email.attachments && email.attachments.length > 0 && !isMockMode) {
             try {
-              // 将所有附件转换为 File 对象
-              const files: File[] = email.attachments.map(attachment => {
-                const blob = base64ToBlob(attachment.content, attachment.filename)
-                return new File([blob], attachment.filename, { type: blob.type })
-              })
-              console.log('[Bitable] 准备上传附件:', files.map(f => f.name))
+              // 逐个获取附件并上传（避免一次性加载所有附件导致超时）
+              const files: File[] = []
 
-              // 使用飞书 SDK 批量上传附件，获取 fileToken
-              const fileTokens = await bitable.base.batchUploadFile(files)
-              console.log('[Bitable] 上传成功，tokens:', fileTokens)
+              for (let i = 0; i < email.attachments.length; i++) {
+                const attachmentMeta = email.attachments[i]
+                console.log(`[Bitable] 获取附件 ${i + 1}/${email.attachments.length}: ${attachmentMeta.filename}`)
 
-              // 构建 IOpenAttachment 对象数组
-              attachmentsData = files.map((file, index) => ({
-                name: file.name,
-                size: file.size,
-                type: file.type,
-                token: fileTokens[index],
-                timeStamp: Date.now()
-              }))
+                try {
+                  // 从后端获取单个附件内容
+                  const response = await getAttachment(email.message_id, i)
+                  const attachmentData = response.data
+
+                  // 转换为 File 对象
+                  const blob = base64ToBlob(attachmentData.content, attachmentData.filename)
+                  const file = new File([blob], attachmentData.filename, { type: attachmentData.type })
+                  files.push(file)
+                } catch (fetchErr) {
+                  console.error(`获取附件失败 (${attachmentMeta.filename}):`, fetchErr)
+                  // 继续处理其他附件
+                }
+              }
+
+              if (files.length > 0) {
+                console.log('[Bitable] 准备上传附件:', files.map(f => f.name))
+
+                // 使用飞书 SDK 批量上传附件，获取 fileToken
+                const fileTokens = await bitable.base.batchUploadFile(files)
+                console.log('[Bitable] 上传成功，tokens:', fileTokens)
+
+                // 构建 IOpenAttachment 对象数组
+                attachmentsData = files.map((file, index) => ({
+                  name: file.name,
+                  size: file.size,
+                  type: file.type,
+                  token: fileTokens[index],
+                  timeStamp: Date.now()
+                }))
+              }
             } catch (attachErr) {
               console.error('上传附件失败:', attachErr)
               // 继续处理，不中断流程

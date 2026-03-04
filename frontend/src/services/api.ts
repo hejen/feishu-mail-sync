@@ -38,6 +38,11 @@ export const getSyncLogs = (limit = 20) =>
 export const getSyncedEmails = () =>
   api.get<Email[]>('/sync/emails')
 
+export const getAttachment = (messageId: string, index: number) =>
+  api.get<{ filename: string; size: number; type: string; content: string }>(
+    `/sync/attachment/${encodeURIComponent(messageId)}/${index}`
+  )
+
 // ===== 配置管理 =====
 export const getProviders = () =>
   api.get<Provider[]>('/config/providers')
