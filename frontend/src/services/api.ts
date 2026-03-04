@@ -38,6 +38,17 @@ export const getSyncLogs = (limit = 20) =>
 export const getSyncedEmails = () =>
   api.get<Email[]>('/sync/emails')
 
+export interface SyncProgress {
+  total: number
+  current: number
+  status: 'idle' | 'syncing' | 'completed' | 'failed'
+  message: string
+  error: string | null
+}
+
+export const getSyncProgress = () =>
+  api.get<SyncProgress>('/sync/progress')
+
 export const getAttachment = (messageId: string, index: number) =>
   api.get<{ filename: string; size: number; type: string; content: string }>(
     `/sync/attachment/${encodeURIComponent(messageId)}/${index}`
