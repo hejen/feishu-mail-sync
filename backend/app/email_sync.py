@@ -68,7 +68,19 @@ class EmailSyncService:
                 return [], "搜索邮件失败"
 
             email_ids = messages[0].split()
+            if not email_ids:
+                return [], "没有找到邮件"
+
             logger.info(f"找到 {len(email_ids)} 封邮件")
+
+            # 批量获取日期头并按日期降序排序
+            id_date_map = self._fetch_dates(email_ids)
+            sorted_ids = sorted(
+                email_ids,
+                key=lambda eid: id_date_map.get(eid, datetime.min),
+                reverse=True  # 最新的在前
+            )
+            logger.info(f"日期头获取完成，共 {len(id_date_map)} 封")
 
             # 获取已同步的邮件 ID
             db = SessionLocal()
@@ -81,25 +93,20 @@ class EmailSyncService:
             finally:
                 db.close()
 
-            # 遍历所有邮件，收集未同步的
-            all_emails = []
-            for email_id in email_ids:
+            # 按日期降序遍历，收集未同步邮件
+            for email_id in sorted_ids:
+                # 已达到限制，提前退出
+                if limit and len(emails) >= limit:
+                    logger.info(f"已达到限制 {limit}，停止获取")
+                    break
+
                 try:
                     email_data = self._parse_email(email_id)
                     if email_data and email_data["message_id"] not in synced_ids:
-                        all_emails.append(email_data)
+                        emails.append(email_data)
                 except Exception as e:
                     logger.warning(f"解析邮件失败: {str(e)}")
                     continue
-
-            # 按日期降序排序（最新的在前）
-            all_emails.sort(key=lambda x: x.get("date", ""), reverse=True)
-
-            # 应用限制
-            if limit:
-                emails = all_emails[:limit]
-            else:
-                emails = all_emails
 
             return emails, f"成功获取 {len(emails)} 封新邮件"
 
