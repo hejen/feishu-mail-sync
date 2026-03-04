@@ -1,8 +1,8 @@
 import axios from 'axios'
 import type { Account, AccountCreate, SyncStatus, SyncLog, Provider, MessageResponse, Email } from '../types'
 
-// 后端 API 地址
-const API_BASE = 'http://localhost:8000/api'
+// 后端 API 地址（使用相对路径，由 Nginx 代理）
+const API_BASE = '/api'
 
 const api = axios.create({
   baseURL: API_BASE,
