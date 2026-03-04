@@ -112,31 +112,28 @@ async def manual_sync(limit: int = None, db: Session = Depends(get_db)):
 
 @router.post("/manual/{account_id}", response_model=MessageResponse)
 async def manual_sync_account(account_id: int, limit: int = None, db: Session = Depends(get_db)):
-    """手动同步单个账户"""
+    """手动同步单个账户（异步模式）"""
     if sync_status["is_syncing"]:
         raise HTTPException(status_code=400, detail="正在同步中，请稍候")
 
+    account = db.query(EmailAccount).filter(EmailAccount.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="账户不存在")
+
+    # 重置状态
     sync_status["is_syncing"] = True
     sync_status["current_emails"] = []
-    clear_attachment_cache()  # 清空旧缓存
+    reset_progress()
 
-    try:
-        account = db.query(EmailAccount).filter(EmailAccount.id == account_id).first()
-        if not account:
-            raise HTTPException(status_code=404, detail="账户不存在")
+    # 启动后台线程
+    thread = threading.Thread(
+        target=_background_sync,
+        args=(account_id, limit),
+        daemon=True
+    )
+    thread.start()
 
-        result = sync_account(account_id, limit=limit)
-
-        if result["success"]:
-            # 将邮件存储到内存中供前端获取
-            sync_status["current_emails"] = result.get("emails", [])
-            log_sync(account_id, result["emails_count"], "success")
-            return MessageResponse(message=f"同步完成，{result['emails_count']} 封新邮件")
-        else:
-            log_sync(account_id, 0, "failed", result["error"])
-            raise HTTPException(status_code=500, detail=result["error"])
-    finally:
-        sync_status["is_syncing"] = False
+    return MessageResponse(message="同步任务已启动，请轮询 /api/sync/progress 获取进度")
 
 
 @router.get("/status", response_model=SyncStatus)
