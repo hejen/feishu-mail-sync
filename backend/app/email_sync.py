@@ -57,7 +57,9 @@ class EmailSyncService:
         emails = []
         try:
             # 选择收件箱
-            self.imap.select("INBOX")
+            status, _ = self.imap.select("INBOX")
+            if status != "OK":
+                return [], "无法选择收件箱"
 
             # 计算搜索日期
             since_date = (datetime.now() - timedelta(days=days)).strftime("%d-%b-%Y")
@@ -220,6 +222,11 @@ class EmailSyncService:
                 for item in data:
                     if isinstance(item, tuple):
                         # item 格式: (b'1 (BODY[HEADER.FIELDS (DATE)] {size}', b'Date: ...\r\n\r\n')
+                        # 验证 item[0] 是否有效
+                        parts = item[0].split()
+                        if not parts:
+                            continue
+                        email_id = parts[0]
                         header = item[1].decode("utf-8", errors="ignore")
                         # 提取 Date 行
                         for line in header.split("\r\n"):
@@ -229,7 +236,6 @@ class EmailSyncService:
                                     date_tuple = email.utils.parsedate_tz(date_str)
                                     if date_tuple:
                                         # 使用邮件 ID 作为 key
-                                        email_id = item[0].split()[0]
                                         result[email_id] = datetime.fromtimestamp(
                                             email.utils.mktime_tz(date_tuple)
                                         )
