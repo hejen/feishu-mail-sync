@@ -14,16 +14,64 @@ from app.utils.crypto import decrypt
 
 logger = logging.getLogger(__name__)
 
-# 附件缓存：{message_id: [{filename, size, type, content}, ...]}
-# 用于临时存储附件内容，供前端按需获取
-_attachment_cache: Dict[str, List[Dict]] = {}
+# 附件缓存：{user_id: {message_id: [{filename, size, type, content}, ...]}
+# 按用户隔离
+_attachment_cache_by_user: Dict[str, Dict[str, List[Dict]]] = {}
+
+
+def cache_attachment(user_id: str, message_id: str, attachments: List[Dict]):
+    """缓存附件（按用户隔离）
+
+    Args:
+        user_id: 用户ID
+        message_id: 邮件 Message-ID
+        attachments: 附件列表
+    """
+    if user_id not in _attachment_cache_by_user:
+        _attachment_cache_by_user[user_id] = {}
+    _attachment_cache_by_user[user_id][message_id] = attachments
+
+
+def clear_attachment_cache(user_id: str = None):
+    """清空附件缓存（按用户隔离）
+
+    Args:
+        user_id: 指定用户ID则只清空该用户的缓存
+否则清空全部
+    """
+    global _attachment_cache_by_user
+    if user_id:
+        _attachment_cache_by_user.pop(user_id, None)
+    else:
+        _attachment_cache_by_user = {}
+
+
+def get_cached_attachment(user_id: str, message_id: str, index: int) -> Optional[Dict]:
+    """从缓存获取单个附件（按用户隔离）
+
+    Args:
+        user_id: 用户ID
+        message_id: 邮件 Message-ID
+        index: 附件索引（从 0 开始）
+
+    Returns:
+        附件信息（包含 content），如果不存在返回 None
+    """
+    user_cache = _attachment_cache_by_user.get(user_id, {})
+    attachments = user_cache.get(message_id)
+    if not attachments:
+        return None
+    if index < 0 or index >= len(attachments):
+        return None
+    return attachments[index]
 
 
 class EmailSyncService:
     """邮件同步服务"""
 
-    def __init__(self, account: EmailAccount):
+    def __init__(self, account: EmailAccount, user_id: str = None):
         self.account = account
+        self.user_id = user_id
         self.imap = None
         self.decrypted_auth_code = decrypt(account.auth_code)
 
@@ -84,12 +132,13 @@ class EmailSyncService:
 
             logger.info(f"找到 {len(email_ids)} 封邮件")
 
-            # 获取已同步的邮件 ID
+            # 获取已同步的邮件 ID（按用户隔离)
             db = SessionLocal()
             try:
                 synced_ids = set(
                     row[0] for row in db.query(EmailCache.message_id).filter(
-                        EmailCache.account_id == self.account.id
+                        EmailCache.account_id == self.account.id,
+                        EmailCache.user_id == self.user_id
                     ).all()
                 )
             finally:
@@ -197,9 +246,9 @@ class EmailSyncService:
                     except:
                         body = ""
 
-        # 缓存附件内容（按 message_id）
+        # 缓存附件内容（按 user_id + message_id）
         if attachment_full:
-            _attachment_cache[message_id] = attachment_full
+            cache_attachment(self.user_id, message_id, attachment_full)
 
         return {
             "message_id": message_id,
@@ -277,8 +326,15 @@ class EmailSyncService:
         return result
 
 
-def sync_account(account_id: int, days: int = None, limit: int = None) -> Dict:
-    """同步单个邮箱账户"""
+def sync_account(user_id: str, account_id: int, days: int = None, limit: int = None) -> Dict:
+    """同步单个邮箱账户
+    
+    Args:
+        user_id: 用户ID
+        account_id: 账户ID
+        days: 同步天数
+        limit: 限制数量
+    """
     db = SessionLocal()
     result = {
         "success": False,
@@ -298,7 +354,7 @@ def sync_account(account_id: int, days: int = None, limit: int = None) -> Dict:
             return result
 
         # 创建同步服务
-        sync_service = EmailSyncService(account)
+        sync_service = EmailSyncService(account, user_id)
 
         # 连接
         success, msg = sync_service.connect()
@@ -334,11 +390,20 @@ def sync_account(account_id: int, days: int = None, limit: int = None) -> Dict:
     return result
 
 
-def log_sync(account_id: int, emails_count: int, status: str, error_message: str = None):
-    """记录同步日志"""
+def log_sync(user_id: str, account_id: int, emails_count: int, status: str, error_message: str = None):
+    """记录同步日志
+    
+    Args:
+        user_id: 用户ID
+        account_id: 账户ID
+        emails_count: 邮件数量
+        status: 状态
+        error_message: 错误信息
+    """
     db = SessionLocal()
     try:
         log = SyncLog(
+            user_id=user_id,
             account_id=account_id,
             emails_count=emails_count,
             status=status,
@@ -350,17 +415,19 @@ def log_sync(account_id: int, emails_count: int, status: str, error_message: str
         db.close()
 
 
-def get_cached_attachment(message_id: str, index: int) -> Optional[Dict]:
-    """从缓存获取单个附件
+def get_cached_attachment(user_id: str, message_id: str, index: int) -> Optional[Dict]:
+    """从缓存获取单个附件（按用户隔离）
 
     Args:
+        user_id: 用户ID
         message_id: 邮件 Message-ID
         index: 附件索引（从 0 开始）
 
     Returns:
         附件信息（包含 content），如果不存在返回 None
     """
-    attachments = _attachment_cache.get(message_id)
+    user_cache = _attachment_cache_by_user.get(user_id, {})
+    attachments = user_cache.get(message_id)
     if not attachments:
         return None
     if index < 0 or index >= len(attachments):
@@ -368,7 +435,14 @@ def get_cached_attachment(message_id: str, index: int) -> Optional[Dict]:
     return attachments[index]
 
 
-def clear_attachment_cache():
-    """清空附件缓存"""
-    global _attachment_cache
-    _attachment_cache = {}
+def clear_attachment_cache(user_id: str = None):
+    """清空附件缓存
+
+    Args:
+        user_id: 指定用户ID则只清空该用户的缓存，否则清空全部
+    """
+    global _attachment_cache_by_user
+    if user_id:
+        _attachment_cache_by_user.pop(user_id, None)
+    else:
+        _attachment_cache_by_user = {}

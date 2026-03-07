@@ -6,15 +6,23 @@ from app.database import get_db, EmailAccount
 from app.models.schemas import AccountCreate, AccountResponse, AccountUpdate, MessageResponse
 from app.providers import get_provider_config
 from app.utils.crypto import encrypt
+from app.dependencies import get_current_user
 
 router = APIRouter(prefix="/api/accounts", tags=["账户管理"])
 
 
 @router.post("", response_model=MessageResponse)
-async def create_account(account: AccountCreate, db: Session = Depends(get_db)):
+async def create_account(
+    account: AccountCreate, 
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user)
+):
     """添加邮箱账户"""
-    # 检查邮箱是否已存在
-    existing = db.query(EmailAccount).filter(EmailAccount.email == account.email).first()
+    # 检查同一用户下邮箱是否已存在
+    existing = db.query(EmailAccount).filter(
+        EmailAccount.user_id == user_id,
+        EmailAccount.email == account.email
+    ).first()
     if existing:
         raise HTTPException(status_code=400, detail="该邮箱账户已存在")
 
@@ -26,6 +34,7 @@ async def create_account(account: AccountCreate, db: Session = Depends(get_db)):
 
     # 创建账户
     db_account = EmailAccount(
+        user_id=user_id,
         email=account.email,
         provider=account.provider,
         auth_code=encrypt(account.auth_code),
@@ -40,16 +49,28 @@ async def create_account(account: AccountCreate, db: Session = Depends(get_db)):
 
 
 @router.get("", response_model=List[AccountResponse])
-async def list_accounts(db: Session = Depends(get_db)):
-    """获取所有邮箱账户"""
-    accounts = db.query(EmailAccount).all()
+async def list_accounts(
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user)
+):
+    """获取当前用户的所有邮箱账户"""
+    accounts = db.query(EmailAccount).filter(
+        EmailAccount.user_id == user_id
+    ).all()
     return accounts
 
 
 @router.delete("/{account_id}", response_model=MessageResponse)
-async def delete_account(account_id: int, db: Session = Depends(get_db)):
+async def delete_account(
+    account_id: int, 
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user)
+):
     """删除邮箱账户"""
-    account = db.query(EmailAccount).filter(EmailAccount.id == account_id).first()
+    account = db.query(EmailAccount).filter(
+        EmailAccount.id == account_id,
+        EmailAccount.user_id == user_id
+    ).first()
     if not account:
         raise HTTPException(status_code=404, detail="账户不存在")
 
@@ -62,10 +83,14 @@ async def delete_account(account_id: int, db: Session = Depends(get_db)):
 async def update_account(
     account_id: int,
     account_update: AccountUpdate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user)
 ):
     """更新邮箱账户"""
-    account = db.query(EmailAccount).filter(EmailAccount.id == account_id).first()
+    account = db.query(EmailAccount).filter(
+        EmailAccount.id == account_id,
+        EmailAccount.user_id == user_id
+    ).first()
     if not account:
         raise HTTPException(status_code=404, detail="账户不存在")
 

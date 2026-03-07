@@ -21,7 +21,7 @@ export const AddAccountModal: React.FC<Props> = ({
   const [selectedProvider, setSelectedProvider] = useState<string>('qq')
 
   useEffect(() => {
-    if (providers.length > 0) {
+    if (providers && providers.length > 0) {
       setSelectedProvider(providers[0].value)
     }
   }, [providers])
@@ -31,7 +31,9 @@ export const AddAccountModal: React.FC<Props> = ({
     onSubmit(values)
   }
 
-  const selectedProviderConfig = providers.find(p => p.value === selectedProvider)
+  const selectedProviderConfig = (providers && Array.isArray(providers)) 
+    ? providers.find(p => p.value === selectedProvider) 
+    : undefined
 
   return (
     <Modal
@@ -50,7 +52,7 @@ export const AddAccountModal: React.FC<Props> = ({
           rules={[{ required: true, message: '请选择邮箱提供商' }]}
         >
           <Select onChange={setSelectedProvider}>
-            {providers.map(p => (
+            {providers && Array.isArray(providers) && providers.map(p => (
               <Select.Option key={p.value} value={p.value}>
                 {p.name}
               </Select.Option>

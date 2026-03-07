@@ -9,6 +9,20 @@ const api = axios.create({
   timeout: 30000,
 })
 
+/**
+ * 设置 API 请求的用户ID
+ * 所有后续请求都会自动携带 X-User-Id header
+ * 
+ * @param userId - 用户ID，传入 null 则清除
+ */
+export function setApiUserId(userId: string | null): void {
+  if (userId) {
+    api.defaults.headers.common['X-User-Id'] = userId
+  } else {
+    delete api.defaults.headers.common['X-User-Id']
+  }
+}
+
 // ===== 账户管理 =====
 export const getAccounts = () =>
   api.get<Account[]>('/accounts')

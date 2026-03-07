@@ -8,11 +8,23 @@ import { AccountList } from './components/AccountList'
 import { SyncLogs } from './components/SyncLogs'
 import { AddAccountModal } from './components/AddAccountModal'
 import { useBitable } from './hooks/useBitable'
+import { useUserId } from './hooks/useUserId'
 import * as api from './services/api'
+import { setApiUserId } from './services/api'
 import type { Account, SyncStatus, SyncLog, Provider } from './types'
 import type { SyncProgress } from './services/api'
 
 function App() {
+  // 用户身份
+  const { userId, loading: userIdLoading, error: userIdError } = useUserId()
+
+  // 同步 userId 到 API 客户端
+  useEffect(() => {
+    if (userId) {
+      setApiUserId(userId)
+    }
+  }, [userId])
+
   // 状态
   const [accounts, setAccounts] = useState<Account[]>([])
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null)
@@ -32,6 +44,8 @@ function App() {
 
   // 加载数据
   const loadData = useCallback(async () => {
+    if (!userId) return
+
     try {
       const [accountsRes, statusRes, logsRes, providersRes] = await Promise.all([
         api.getAccounts(),
@@ -39,20 +53,25 @@ function App() {
         api.getSyncLogs(),
         api.getProviders()
       ])
-      setAccounts(accountsRes.data)
-      setSyncStatus(statusRes.data)
-      setSyncLogs(logsRes.data.slice(0, 10))
-      setProviders(providersRes.data)
+      // 验证 API 响应数据
+      setAccounts(Array.isArray(accountsRes.data) ? accountsRes.data : [])
+      setSyncStatus(statusRes.data || null)
+      setSyncLogs(Array.isArray(logsRes.data) ? logsRes.data.slice(0, 10) : [])
+      setProviders(Array.isArray(providersRes.data) ? providersRes.data : [])
     } catch (err) {
-      message.error('加载数据失败')
+      console.error('加载数据失败:', err)
+      const errorMsg = err instanceof Error ? err.message : '加载数据失败'
+      message.error(errorMsg)
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [userId])
 
   useEffect(() => {
-    loadData()
-  }, [loadData])
+    if (userId) {
+      loadData()
+    }
+  }, [loadData, userId])
 
   // 清理进度轮询
   const clearProgressPoll = useCallback(() => {
@@ -62,43 +81,61 @@ function App() {
     }
   }, [])
 
+  // 检查同步进度
+  const checkSyncProgress = useCallback(async () => {
+    const res = await api.getSyncProgress()
+    setSyncProgress(res.data)
+
+    if (res.data.status === 'completed') {
+      clearProgressPoll()
+      message.success(res.data.message || '同步完成')
+      await writeSyncedEmails()
+      setSyncing(false)
+      loadData()
+    } else if (res.data.status === 'failed') {
+      clearProgressPoll()
+      message.error(res.data.error || res.data.message || '同步失败')
+      setSyncing(false)
+    }
+  }, [clearProgressPoll, loadData])
+
+  // 写入同步的邮件到多维表格
+  const writeSyncedEmails = useCallback(async () => {
+    const emailsRes = await api.getSyncedEmails()
+    if (emailsRes.data.length === 0) return
+
+    const result = await writeEmails(emailsRes.data)
+    if (result.success) {
+      const mockHint = (result as any).isMockMode ? ' (本地模拟模式)' : ''
+      message.success(`已写入 ${result.count} 封邮件到多维表格${mockHint}`)
+    } else {
+      message.error(result.message || '写入多维表格失败')
+    }
+  }, [writeEmails])
+
   // 开始进度轮询
   const startProgressPoll = useCallback(() => {
     clearProgressPoll()
+    
+    const MAX_FAILS = 5
+    let failCount = 0
 
     progressPollRef.current = setInterval(async () => {
       try {
-        const res = await api.getSyncProgress()
-        setSyncProgress(res.data)
-
-        if (res.data.status === 'completed') {
+        await checkSyncProgress()
+        failCount = 0
+      } catch (err) {
+        failCount++
+        console.error(`获取进度失败 (${failCount}/${MAX_FAILS}):`, err)
+        
+        if (failCount >= MAX_FAILS) {
           clearProgressPoll()
-          message.success(res.data.message || '同步完成')
-
-          // 获取同步的邮件并写入多维表格
-          const emailsRes = await api.getSyncedEmails()
-          if (emailsRes.data.length > 0) {
-            const result = await writeEmails(emailsRes.data)
-            if (result.success) {
-              const mockHint = (result as any).isMockMode ? ' (本地模拟模式)' : ''
-              message.success(`已写入 ${result.count} 封邮件到多维表格${mockHint}`)
-            } else {
-              message.error(result.message || '写入多维表格失败')
-            }
-          }
-
-          setSyncing(false)
-          loadData()
-        } else if (res.data.status === 'failed') {
-          clearProgressPoll()
-          message.error(res.data.error || res.data.message || '同步失败')
+          message.error('获取同步进度失败，请刷新页面')
           setSyncing(false)
         }
-      } catch (err) {
-        console.error('获取进度失败:', err)
       }
     }, 1000)
-  }, [clearProgressPoll, writeEmails, loadData])
+  }, [clearProgressPoll, checkSyncProgress])
 
   // 组件卸载时清理
   useEffect(() => {
@@ -113,19 +150,7 @@ function App() {
     try {
       const res = await api.manualSync(syncLimit)
       message.success(res.data.message)
-
-      // 获取同步的邮件并写入多维表格
-      const emailsRes = await api.getSyncedEmails()
-      if (emailsRes.data.length > 0) {
-        const result = await writeEmails(emailsRes.data)
-        if (result.success) {
-          const mockHint = (result as any).isMockMode ? ' (本地模拟模式)' : ''
-          message.success(`已写入 ${result.count} 封邮件到多维表格${mockHint}`)
-        } else {
-          message.error(result.message || '写入多维表格失败')
-        }
-      }
-
+      await writeSyncedEmails()
       loadData()
     } catch (err: any) {
       message.error(err.response?.data?.detail || '同步失败')
@@ -158,8 +183,9 @@ function App() {
       await api.deleteAccount(id)
       message.success('删除成功')
       loadData()
-    } catch (err) {
-      message.error('删除失败')
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : '删除失败'
+      message.error(errorMsg)
     }
   }
 
@@ -170,8 +196,9 @@ function App() {
       message.success('添加成功')
       setModalVisible(false)
       loadData()
-    } catch (err: any) {
-      message.error(err.response?.data?.detail || '添加失败')
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : '添加失败'
+      message.error(errorMsg)
     }
   }
 
@@ -180,6 +207,39 @@ function App() {
     const limit = Math.max(1, Math.min(99999, value || 100))
     setSyncLimit(limit)
     localStorage.setItem('syncLimit', String(limit))
+  }
+
+  // 等待用户身份加载
+  if (userIdLoading) {
+    return (
+      <ConfigProvider locale={zhCN}>
+        <div style={{ padding: 16, maxWidth: 400, margin: '0 auto', textAlign: 'center' }}>
+          正在加载用户信息...
+        </div>
+      </ConfigProvider>
+    )
+  }
+
+  // 用户身份加载失败
+  if (userIdError) {
+    return (
+      <ConfigProvider locale={zhCN}>
+        <div style={{ padding: 16, maxWidth: 400, margin: '0 auto', textAlign: 'center', color: 'red' }}>
+          加载失败: {userIdError}
+        </div>
+      </ConfigProvider>
+    )
+  }
+
+  // 没有用户ID（不应该发生）
+  if (!userId) {
+    return (
+      <ConfigProvider locale={zhCN}>
+        <div style={{ padding: 16, maxWidth: 400, margin: '0 auto', textAlign: 'center', color: 'red' }}>
+          无法获取用户身份
+        </div>
+      </ConfigProvider>
+    )
   }
 
   return (

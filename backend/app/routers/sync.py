@@ -1,103 +1,103 @@
 import threading
+from typing import Dict
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
 
-from app.database import get_db, EmailAccount, SyncLog
+from app.database import get_db, EmailAccount, SyncLog, EmailCache
 from app.models.schemas import SyncStatus, SyncLogResponse, MessageResponse
 from app.email_sync import sync_account, log_sync, get_cached_attachment, clear_attachment_cache
+from app.dependencies import get_current_user
 
 router = APIRouter(prefix="/api/sync", tags=["同步操作"])
 
-# 同步状态（内存中）
-sync_status = {
-    "is_syncing": False,
-    "current_emails": [],
-    "progress": {
-        "total": 0,
-        "current": 0,
-        "status": "idle",  # idle/syncing/completed/failed
-        "message": "",
-        "error": None
-    }
-}
+# 同步状态（按用户隔离）
+sync_status_by_user: Dict[str, dict] = {}
 
 
-def update_progress(current: int, total: int, message: str = ""):
-    """更新同步进度"""
-    sync_status["progress"]["current"] = current
-    sync_status["progress"]["total"] = total
-    sync_status["progress"]["message"] = message
+def get_user_sync_status(user_id: str) -> dict:
+    """获取用户的同步状态"""
+    if user_id not in sync_status_by_user:
+        sync_status_by_user[user_id] = {
+            "is_syncing": False,
+            "current_emails": [],
+            "progress": {
+                "total": 0,
+                "current": 0,
+                "status": "idle",
+                "message": "",
+                "error": None
+            }
+        }
+    return sync_status_by_user[user_id]
 
 
-def reset_progress():
-    """重置进度状态"""
-    sync_status["progress"] = {
-        "total": 0,
-        "current": 0,
-        "status": "idle",
-        "message": "",
-        "error": None
-    }
-
-
-def _background_sync(account_id: int, limit: int):
+def _background_sync(user_id: str, account_id: int, limit: int):
     """后台同步任务（在线程中执行）"""
-    from app.email_sync import sync_account
+    user_status = get_user_sync_status(user_id)
 
     try:
-        sync_status["progress"]["status"] = "syncing"
-        sync_status["progress"]["message"] = "正在连接邮箱..."
+        user_status["progress"]["status"] = "syncing"
+        user_status["progress"]["message"] = "正在连接邮箱..."
 
         # 执行同步
-        result = sync_account(account_id, limit=limit)
+        result = sync_account(user_id, account_id, limit=limit)
 
         if result["success"]:
-            sync_status["current_emails"] = result.get("emails", [])
-            sync_status["progress"]["status"] = "completed"
-            sync_status["progress"]["message"] = f"同步完成，共 {result['emails_count']} 封邮件"
-            log_sync(account_id, result["emails_count"], "success")
+            user_status["current_emails"] = result.get("emails", [])
+            user_status["progress"]["status"] = "completed"
+            user_status["progress"]["message"] = f"同步完成，共 {result['emails_count']} 封邮件"
+            log_sync(user_id, account_id, result["emails_count"], "success")
         else:
-            sync_status["progress"]["status"] = "failed"
-            sync_status["progress"]["error"] = result["error"]
-            sync_status["progress"]["message"] = f"同步失败: {result['error']}"
-            log_sync(account_id, 0, "failed", result["error"])
+            user_status["progress"]["status"] = "failed"
+            user_status["progress"]["error"] = result["error"]
+            user_status["progress"]["message"] = f"同步失败: {result['error']}"
+            log_sync(user_id, account_id, 0, "failed", result["error"])
 
     except Exception as e:
-        sync_status["progress"]["status"] = "failed"
-        sync_status["progress"]["error"] = str(e)
-        sync_status["progress"]["message"] = f"同步异常: {str(e)}"
+        user_status["progress"]["status"] = "failed"
+        user_status["progress"]["error"] = str(e)
+        user_status["progress"]["message"] = f"同步异常: {str(e)}"
     finally:
-        sync_status["is_syncing"] = False
+        user_status["is_syncing"] = False
 
 
 @router.post("/manual", response_model=MessageResponse)
-async def manual_sync(limit: int = None, db: Session = Depends(get_db)):
+async def manual_sync(
+    limit: int = None, 
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user)
+):
     """手动触发同步所有账户"""
-    if sync_status["is_syncing"]:
+    user_status = get_user_sync_status(user_id)
+    
+    if user_status["is_syncing"]:
         raise HTTPException(status_code=400, detail="正在同步中，请稍候")
 
-    sync_status["is_syncing"] = True
-    sync_status["current_emails"] = []
-    clear_attachment_cache()  # 清空旧缓存
+    user_status["is_syncing"] = True
+    user_status["current_emails"] = []
+    clear_attachment_cache(user_id)
 
     try:
-        accounts = db.query(EmailAccount).filter(EmailAccount.is_active == True).all()
+        accounts = db.query(EmailAccount).filter(
+            EmailAccount.user_id == user_id,
+            EmailAccount.is_active == True
+        ).all()
 
         total_synced = 0
         errors = []
 
         for account in accounts:
-            result = sync_account(account.id, limit=limit)
+            result = sync_account(user_id, account.id, limit=limit)
 
             if result["success"]:
                 total_synced += result["emails_count"]
-                sync_status["current_emails"].extend(result.get("emails", []))
-                log_sync(account.id, result["emails_count"], "success")
+                user_status["current_emails"].extend(result.get("emails", []))
+                log_sync(user_id, account.id, result["emails_count"], "success")
             else:
                 errors.append(f"{account.email}: {result['error']}")
-                log_sync(account.id, 0, "failed", result["error"])
+                log_sync(user_id, account.id, 0, "failed", result["error"])
 
         if errors:
             return MessageResponse(
@@ -107,28 +107,44 @@ async def manual_sync(limit: int = None, db: Session = Depends(get_db)):
         return MessageResponse(message=f"同步完成，{total_synced} 封新邮件")
 
     finally:
-        sync_status["is_syncing"] = False
+        user_status["is_syncing"] = False
 
 
 @router.post("/manual/{account_id}", response_model=MessageResponse)
-async def manual_sync_account(account_id: int, limit: int = None, db: Session = Depends(get_db)):
+async def manual_sync_account(
+    account_id: int, 
+    limit: int = None, 
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user)
+):
     """手动同步单个账户（异步模式）"""
-    if sync_status["is_syncing"]:
+    user_status = get_user_sync_status(user_id)
+    
+    if user_status["is_syncing"]:
         raise HTTPException(status_code=400, detail="正在同步中，请稍候")
 
-    account = db.query(EmailAccount).filter(EmailAccount.id == account_id).first()
+    account = db.query(EmailAccount).filter(
+        EmailAccount.id == account_id,
+        EmailAccount.user_id == user_id
+    ).first()
     if not account:
         raise HTTPException(status_code=404, detail="账户不存在")
 
     # 重置状态
-    sync_status["is_syncing"] = True
-    sync_status["current_emails"] = []
-    reset_progress()
+    user_status["is_syncing"] = True
+    user_status["current_emails"] = []
+    user_status["progress"] = {
+        "total": 0,
+        "current": 0,
+        "status": "idle",
+        "message": "",
+        "error": None
+    }
 
     # 启动后台线程
     thread = threading.Thread(
         target=_background_sync,
-        args=(account_id, limit),
+        args=(user_id, account_id, limit),
         daemon=True
     )
     thread.start()
@@ -137,20 +153,30 @@ async def manual_sync_account(account_id: int, limit: int = None, db: Session = 
 
 
 @router.get("/status", response_model=SyncStatus)
-async def get_sync_status(db: Session = Depends(get_db)):
+async def get_sync_status(
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user)
+):
     """获取同步状态"""
-    accounts = db.query(EmailAccount).all()
+    accounts = db.query(EmailAccount).filter(
+        EmailAccount.user_id == user_id
+    ).all()
 
     # 获取邮件总数
-    from app.database import EmailCache
-    total_emails = db.query(EmailCache).count()
+    total_emails = db.query(EmailCache).filter(
+        EmailCache.user_id == user_id
+    ).count()
 
     # 获取最近同步时间
-    latest_log = db.query(SyncLog).order_by(SyncLog.sync_time.desc()).first()
+    latest_log = db.query(SyncLog).filter(
+        SyncLog.user_id == user_id
+    ).order_by(SyncLog.sync_time.desc()).first()
     last_sync_time = latest_log.sync_time if latest_log else None
+    
+    user_status = get_user_sync_status(user_id)
 
     return SyncStatus(
-        is_syncing=sync_status["is_syncing"],
+        is_syncing=user_status["is_syncing"],
         last_sync_time=last_sync_time,
         total_emails=total_emails,
         accounts=[
@@ -165,14 +191,20 @@ async def get_sync_status(db: Session = Depends(get_db)):
 
 
 @router.get("/logs", response_model=List[SyncLogResponse])
-async def get_sync_logs(limit: int = 20, db: Session = Depends(get_db)):
+async def get_sync_logs(
+    limit: int = 20, 
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user)
+):
     """获取同步日志"""
-    logs = db.query(SyncLog).order_by(SyncLog.sync_time.desc()).limit(limit).all()
+    logs = db.query(SyncLog).filter(
+        SyncLog.user_id == user_id
+    ).order_by(SyncLog.sync_time.desc()).limit(limit).all()
     return logs
 
 
 @router.get("/progress")
-async def get_sync_progress():
+async def get_sync_progress(user_id: str = Depends(get_current_user)):
     """获取同步进度
 
     Returns:
@@ -184,21 +216,27 @@ async def get_sync_progress():
             "error": 错误信息（如果有）
         }
     """
-    return sync_status["progress"]
+    user_status = get_user_sync_status(user_id)
+    return user_status["progress"]
 
 
 @router.get("/emails")
-async def get_synced_emails(db: Session = Depends(get_db)):
+async def get_synced_emails(user_id: str = Depends(get_current_user)):
     """获取已同步的邮件列表（用于前端写入多维表格）
 
     注意：附件只返回元信息（filename, size, type），不包含 content。
     需要通过 /api/sync/attachment/{message_id}/{index} 接口按需获取附件内容。
     """
-    return sync_status.get("current_emails", [])
+    user_status = get_user_sync_status(user_id)
+    return user_status.get("current_emails", [])
 
 
 @router.get("/attachment/{message_id}/{index}")
-async def get_attachment(message_id: str, index: int):
+async def get_attachment(
+    message_id: str, 
+    index: int,
+    user_id: str = Depends(get_current_user)
+):
     """获取单个附件的内容
 
     Args:
@@ -208,7 +246,7 @@ async def get_attachment(message_id: str, index: int):
     Returns:
         附件信息，包含 content（base64 编码）
     """
-    attachment = get_cached_attachment(message_id, index)
+    attachment = get_cached_attachment(user_id, message_id, index)
     if not attachment:
         raise HTTPException(
             status_code=404,

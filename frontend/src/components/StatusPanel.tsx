@@ -15,7 +15,7 @@ export const StatusPanel: React.FC<Props> = ({ status, loading }) => {
         <Col span={12}>
           <Statistic
             title="已连接邮箱"
-            value={status?.accounts.length || 0}
+            value={status?.accounts?.length || 0}
             prefix={<MailOutlined />}
             loading={loading}
           />
