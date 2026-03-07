@@ -33,21 +33,24 @@ def get_user_sync_status(user_id: str) -> dict:
     return sync_status_by_user[user_id]
 
 
-def _background_sync(user_id: str, account_id: int, limit: int):
+def _background_sync(user_id: str, account_id: int, limit: int, filter_synced: bool = False):
     """后台同步任务（在线程中执行）"""
     user_status = get_user_sync_status(user_id)
 
     try:
         user_status["progress"]["status"] = "syncing"
         user_status["progress"]["message"] = "正在连接邮箱..."
+        user_status["progress"]["total"] = 1
+        user_status["progress"]["current"] = 0
 
         # 执行同步
-        result = sync_account(user_id, account_id, limit=limit)
+        result = sync_account(user_id, account_id, limit=limit, filter_synced=filter_synced)
 
         if result["success"]:
             user_status["current_emails"] = result.get("emails", [])
             user_status["progress"]["status"] = "completed"
             user_status["progress"]["message"] = f"同步完成，共 {result['emails_count']} 封邮件"
+            user_status["progress"]["current"] = 1
             log_sync(user_id, account_id, result["emails_count"], "success")
         else:
             user_status["progress"]["status"] = "failed"
@@ -63,57 +66,104 @@ def _background_sync(user_id: str, account_id: int, limit: int):
         user_status["is_syncing"] = False
 
 
-@router.post("/manual", response_model=MessageResponse)
-async def manual_sync(
-    limit: int = None, 
-    db: Session = Depends(get_db),
-    user_id: str = Depends(get_current_user)
-):
-    """手动触发同步所有账户"""
+def _background_sync_all(user_id: str, account_ids: List[int], limit: int, filter_synced: bool = False):
+    """后台同步所有账户任务（在线程中执行）"""
     user_status = get_user_sync_status(user_id)
-    
-    if user_status["is_syncing"]:
-        raise HTTPException(status_code=400, detail="正在同步中，请稍候")
-
-    user_status["is_syncing"] = True
-    user_status["current_emails"] = []
-    clear_attachment_cache(user_id)
 
     try:
-        accounts = db.query(EmailAccount).filter(
-            EmailAccount.user_id == user_id,
-            EmailAccount.is_active == True
-        ).all()
+        user_status["progress"]["status"] = "syncing"
+        user_status["progress"]["message"] = "正在连接邮箱..."
+        user_status["progress"]["total"] = len(account_ids)
+        user_status["progress"]["current"] = 0
 
         total_synced = 0
         errors = []
+        total_accounts = len(account_ids)
 
-        for account in accounts:
-            result = sync_account(user_id, account.id, limit=limit)
+        for idx, account_id in enumerate(account_ids, 1):
+            # 更新进度：正在同步第 N 个账户
+            user_status["progress"]["message"] = f"正在同步账户 {idx}/{total_accounts}..."
+
+            result = sync_account(user_id, account_id, limit=limit, filter_synced=filter_synced)
 
             if result["success"]:
                 total_synced += result["emails_count"]
                 user_status["current_emails"].extend(result.get("emails", []))
-                log_sync(user_id, account.id, result["emails_count"], "success")
+                log_sync(user_id, account_id, result["emails_count"], "success")
             else:
-                errors.append(f"{account.email}: {result['error']}")
-                log_sync(user_id, account.id, 0, "failed", result["error"])
+                errors.append(f"账户 {idx}: {result['error']}")
+                log_sync(user_id, account_id, 0, "failed", result["error"])
 
+            # 更新进度：已处理 N 个账户
+            user_status["progress"]["current"] = idx
+
+        # 同步完成
+        user_status["progress"]["status"] = "completed"
         if errors:
-            return MessageResponse(
-                message=f"同步完成，{total_synced} 封新邮件。部分失败: {'; '.join(errors)}",
-                success=True
-            )
-        return MessageResponse(message=f"同步完成，{total_synced} 封新邮件")
+            user_status["progress"]["message"] = f"同步完成，{total_synced} 封新邮件。部分失败: {'; '.join(errors)}"
+            user_status["progress"]["error"] = "; ".join(errors)
+        else:
+            user_status["progress"]["message"] = f"同步完成，共 {total_synced} 封邮件"
 
+    except Exception as e:
+        user_status["progress"]["status"] = "failed"
+        user_status["progress"]["error"] = str(e)
+        user_status["progress"]["message"] = f"同步异常: {str(e)}"
     finally:
         user_status["is_syncing"] = False
 
 
+@router.post("/manual", response_model=MessageResponse)
+async def manual_sync(
+    limit: int = None,
+    filter_synced: bool = False,
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user)
+):
+    """手动触发同步所有账户（异步模式）"""
+    user_status = get_user_sync_status(user_id)
+
+    if user_status["is_syncing"]:
+        raise HTTPException(status_code=400, detail="正在同步中，请稍候")
+
+    # 获取活跃账户
+    accounts = db.query(EmailAccount).filter(
+        EmailAccount.user_id == user_id,
+        EmailAccount.is_active == True
+    ).all()
+
+    if not accounts:
+        raise HTTPException(status_code=400, detail="没有可同步的账户")
+
+    # 重置状态
+    user_status["is_syncing"] = True
+    user_status["current_emails"] = []
+    user_status["progress"] = {
+        "total": len(accounts),
+        "current": 0,
+        "status": "idle",
+        "message": "",
+        "error": None
+    }
+    clear_attachment_cache(user_id)
+
+    # 启动后台线程
+    account_ids = [acc.id for acc in accounts]
+    thread = threading.Thread(
+        target=_background_sync_all,
+        args=(user_id, account_ids, limit, filter_synced),
+        daemon=True
+    )
+    thread.start()
+
+    return MessageResponse(message="同步任务已启动，请轮询 /api/sync/progress 获取进度")
+
+
 @router.post("/manual/{account_id}", response_model=MessageResponse)
 async def manual_sync_account(
-    account_id: int, 
-    limit: int = None, 
+    account_id: int,
+    limit: int = None,
+    filter_synced: bool = False,
     db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user)
 ):
@@ -144,7 +194,7 @@ async def manual_sync_account(
     # 启动后台线程
     thread = threading.Thread(
         target=_background_sync,
-        args=(user_id, account_id, limit),
+        args=(user_id, account_id, limit, filter_synced),
         daemon=True
     )
     thread.start()
