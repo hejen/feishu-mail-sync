@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { ConfigProvider, Button, message, Space, InputNumber, Progress } from 'antd'
+import { ConfigProvider, Button, message, Space, InputNumber, Progress, Checkbox } from 'antd'
 import { PlusOutlined, SyncOutlined } from '@ant-design/icons'
 import zhCN from 'antd/locale/zh_CN'
 
@@ -285,6 +285,14 @@ function App() {
             onChange={handleSyncLimitChange}
             style={{ width: '100%' }}
             placeholder="1-99999"
+          />
+        </div>
+
+        <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span>过滤已同步邮件</span>
+          <Checkbox
+            checked={filterSyncedEmails}
+            onChange={(e) => handleFilterSyncedChange(e.target.checked)}
           />
         </div>
 
