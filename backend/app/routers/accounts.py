@@ -48,6 +48,19 @@ async def create_account(
     db.commit()
     db.refresh(db_account)
 
+    # 清理该账户可能存在的旧缓存记录
+    try:
+        deleted_count = db.query(EmailCache).filter(
+            EmailCache.user_id == user_id,
+            EmailCache.account_id == db_account.id
+        ).delete()
+        if deleted_count > 0:
+            logger.info(f"清理了账户 {db_account.id} 的 {deleted_count} 条缓存记录")
+        db.commit()
+    except Exception as e:
+        logger.error(f"清理缓存失败: {str(e)}")
+        # 不阻止账户创建
+
     return MessageResponse(message="邮箱账户添加成功")
 
 
