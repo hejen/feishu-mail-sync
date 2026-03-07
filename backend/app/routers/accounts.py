@@ -1,12 +1,15 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
+import logging
 
-from app.database import get_db, EmailAccount
+from app.database import get_db, EmailAccount, EmailCache
 from app.models.schemas import AccountCreate, AccountResponse, AccountUpdate, MessageResponse
 from app.providers import get_provider_config
 from app.utils.crypto import encrypt
 from app.dependencies import get_current_user
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/accounts", tags=["账户管理"])
 
