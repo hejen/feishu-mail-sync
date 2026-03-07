@@ -90,6 +90,18 @@ async def delete_account(
     if not account:
         raise HTTPException(status_code=404, detail="账户不存在")
 
+    # 先清理该账户的缓存记录
+    try:
+        deleted_count = db.query(EmailCache).filter(
+            EmailCache.user_id == user_id,
+            EmailCache.account_id == account_id
+        ).delete()
+        if deleted_count > 0:
+            logger.info(f"清理了账户 {account_id} 的 {deleted_count} 条缓存记录")
+    except Exception as e:
+        logger.error(f"清理缓存失败: {str(e)}")
+        # 继续删除账户
+
     db.delete(account)
     db.commit()
     return MessageResponse(message="邮箱账户删除成功")
