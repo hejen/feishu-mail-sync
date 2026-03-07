@@ -105,11 +105,17 @@ class EmailSyncService:
                 pass
             self.imap = None
 
-    def fetch_emails(self, days: int = 30, limit: int = None, progress_callback=None) -> Tuple[List[Dict], str]:
+    def fetch_emails(self, days: int = 30, limit: int = None, filter_synced: bool = False, progress_callback=None) -> Tuple[List[Dict], str]:
         """获取邮件列表
 
         优化策略：IMAP 邮件 ID 通常是递增的，新邮件 ID 更大。
         因此反向遍历（从最大 ID 开始）可以快速获取最新邮件，无需获取日期头。
+
+        Args:
+            days: 同步天数
+            limit: 限制数量
+            filter_synced: 是否过滤已同步的邮件（默认 False，不过滤）
+            progress_callback: 进度回调函数
         """
         emails = []
         try:
@@ -133,16 +139,19 @@ class EmailSyncService:
             logger.info(f"找到 {len(email_ids)} 封邮件")
 
             # 获取已同步的邮件 ID（按用户隔离)
-            db = SessionLocal()
-            try:
-                synced_ids = set(
-                    row[0] for row in db.query(EmailCache.message_id).filter(
-                        EmailCache.account_id == self.account.id,
-                        EmailCache.user_id == self.user_id
-                    ).all()
-                )
-            finally:
-                db.close()
+            # 只有在 filter_synced=True 时才查询已同步邮件
+            synced_ids = set()
+            if filter_synced:
+                db = SessionLocal()
+                try:
+                    synced_ids = set(
+                        row[0] for row in db.query(EmailCache.message_id).filter(
+                            EmailCache.account_id == self.account.id,
+                            EmailCache.user_id == self.user_id
+                        ).all()
+                    )
+                finally:
+                    db.close()
 
             # 反向遍历邮件 ID（新邮件 ID 更大，从最大开始遍历）
             # 这样可以快速获取最新邮件，无需获取日期头
@@ -326,14 +335,15 @@ class EmailSyncService:
         return result
 
 
-def sync_account(user_id: str, account_id: int, days: int = None, limit: int = None) -> Dict:
+def sync_account(user_id: str, account_id: int, days: int = None, limit: int = None, filter_synced: bool = False) -> Dict:
     """同步单个邮箱账户
-    
+
     Args:
         user_id: 用户ID
         account_id: 账户ID
         days: 同步天数
         limit: 限制数量
+        filter_synced: 是否过滤已同步的邮件（默认 False，不过滤）
     """
     db = SessionLocal()
     result = {
@@ -370,8 +380,20 @@ def sync_account(user_id: str, account_id: int, days: int = None, limit: int = N
 
         # 获取邮件
         days = days or settings.default_sync_days
-        emails, msg = sync_service.fetch_emails(days, limit)
+        emails, msg = sync_service.fetch_emails(days, limit, filter_synced)
         result["emails_count"] = len(emails)
+
+        # 将新邮件保存到缓存表
+        if emails:
+            for email_data in emails:
+                cache_entry = EmailCache(
+                    user_id=user_id,
+                    account_id=account_id,
+                    message_id=email_data["message_id"],
+                    subject=email_data.get("subject")
+                )
+                db.add(cache_entry)
+            logger.info(f"已缓存 {len(emails)} 封邮件到 EmailCache 表")
 
         # 更新同步时间
         account.last_sync_time = datetime.utcnow()
@@ -383,6 +405,7 @@ def sync_account(user_id: str, account_id: int, days: int = None, limit: int = N
     except Exception as e:
         logger.error(f"同步失败: {str(e)}\n{traceback.format_exc()}")
         result["error"] = str(e)
+        db.rollback()
     finally:
         sync_service.disconnect()
         db.close()
