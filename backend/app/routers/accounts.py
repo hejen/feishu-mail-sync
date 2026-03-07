@@ -1,17 +1,29 @@
+import logging
+from typing import List
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import List
-import logging
 
-from app.database import get_db, EmailAccount, EmailCache
+from app.database import EmailAccount, EmailCache, get_db
+from app.dependencies import get_current_user
 from app.models.schemas import AccountCreate, AccountResponse, AccountUpdate, MessageResponse
 from app.providers import get_provider_config
 from app.utils.crypto import encrypt
-from app.dependencies import get_current_user
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/accounts", tags=["账户管理"])
+
+
+def _clear_email_cache(db: Session, user_id: str, account_id: int) -> int:
+    """清理指定账户的邮件缓存记录，返回删除的记录数"""
+    deleted_count = db.query(EmailCache).filter(
+        EmailCache.user_id == user_id,
+        EmailCache.account_id == account_id
+    ).delete()
+    if deleted_count > 0:
+        logger.info(f"[user_id={user_id}] 清理账户 {account_id} 的缓存记录: {deleted_count} 条")
+    return deleted_count
 
 
 @router.post("", response_model=MessageResponse)
@@ -45,21 +57,12 @@ async def create_account(
         imap_port=provider_config.imap_port
     )
     db.add(db_account)
+
+    # 清理该账户可能存在的旧缓存记录（在同一个事务中）
+    _clear_email_cache(db, user_id, db_account.id)
+
     db.commit()
     db.refresh(db_account)
-
-    # 清理该账户可能存在的旧缓存记录
-    try:
-        deleted_count = db.query(EmailCache).filter(
-            EmailCache.user_id == user_id,
-            EmailCache.account_id == db_account.id
-        ).delete()
-        if deleted_count > 0:
-            logger.info(f"清理了账户 {db_account.id} 的 {deleted_count} 条缓存记录")
-        db.commit()
-    except Exception as e:
-        logger.error(f"清理缓存失败: {str(e)}")
-        # 不阻止账户创建
 
     return MessageResponse(message="邮箱账户添加成功")
 
@@ -90,20 +93,12 @@ async def delete_account(
     if not account:
         raise HTTPException(status_code=404, detail="账户不存在")
 
-    # 先清理该账户的缓存记录
-    try:
-        deleted_count = db.query(EmailCache).filter(
-            EmailCache.user_id == user_id,
-            EmailCache.account_id == account_id
-        ).delete()
-        if deleted_count > 0:
-            logger.info(f"[user_id={user_id}] 清理账户 {account_id} 的缓存记录: {deleted_count} 条")
-    except Exception as e:
-        logger.error(f"[user_id={user_id}] account_id={account_id} 清理缓存失败: {str(e)}", exc_info=True)
-        # 继续删除账户
+    # 清理该账户的缓存记录（在同一个事务中）
+    _clear_email_cache(db, user_id, account_id)
 
     db.delete(account)
     db.commit()
+
     return MessageResponse(message="邮箱账户删除成功")
 
 
