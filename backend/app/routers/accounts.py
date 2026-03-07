@@ -97,9 +97,9 @@ async def delete_account(
             EmailCache.account_id == account_id
         ).delete()
         if deleted_count > 0:
-            logger.info(f"清理了账户 {account_id} 的 {deleted_count} 条缓存记录")
+            logger.info(f"[user_id={user_id}] 清理账户 {account_id} 的缓存记录: {deleted_count} 条")
     except Exception as e:
-        logger.error(f"清理缓存失败: {str(e)}")
+        logger.error(f"[user_id={user_id}] account_id={account_id} 清理缓存失败: {str(e)}", exc_info=True)
         # 继续删除账户
 
     db.delete(account)
