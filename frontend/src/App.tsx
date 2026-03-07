@@ -37,6 +37,10 @@ function App() {
     const saved = localStorage.getItem('syncLimit')
     return saved ? parseInt(saved) : 100
   })
+  const [filterSyncedEmails, setFilterSyncedEmails] = useState<boolean>(() => {
+    const saved = localStorage.getItem('filterSyncedEmails')
+    return saved ? saved === 'true' : false  // 默认 false（不勾选）
+  })
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null)
   const progressPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -142,20 +146,21 @@ function App() {
     return () => clearProgressPoll()
   }, [clearProgressPoll])
 
-  // 同步所有账户
+  // 同步所有账户（异步模式）
   const handleSyncAll = async () => {
     if (syncing) return
 
     setSyncing(true)
+    setSyncProgress({ total: 0, current: 0, status: 'syncing', message: '启动同步...', error: null })
+
     try {
-      const res = await api.manualSync(syncLimit)
-      message.success(res.data.message)
-      await writeSyncedEmails()
-      loadData()
+      await api.manualSync(syncLimit, filterSyncedEmails)
+      message.info('同步任务已启动，请稍候...')
+      startProgressPoll()
     } catch (err: any) {
-      message.error(err.response?.data?.detail || '同步失败')
-    } finally {
       setSyncing(false)
+      setSyncProgress(null)
+      message.error(err.response?.data?.detail || '启动同步失败')
     }
   }
 
@@ -167,7 +172,7 @@ function App() {
     setSyncProgress({ total: 0, current: 0, status: 'syncing', message: '启动同步...', error: null })
 
     try {
-      await api.manualSyncAccount(id, syncLimit)
+      await api.manualSyncAccount(id, syncLimit, filterSyncedEmails)
       message.info('同步任务已启动，请稍候...')
       startProgressPoll()
     } catch (err: any) {
@@ -207,6 +212,12 @@ function App() {
     const limit = Math.max(1, Math.min(99999, value || 100))
     setSyncLimit(limit)
     localStorage.setItem('syncLimit', String(limit))
+  }
+
+  // 处理过滤已同步邮件变更
+  const handleFilterSyncedChange = (checked: boolean) => {
+    setFilterSyncedEmails(checked)
+    localStorage.setItem('filterSyncedEmails', String(checked))
   }
 
   // 等待用户身份加载
