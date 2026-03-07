@@ -37,11 +37,11 @@ export const updateAccount = (id: number, data: { is_active?: boolean; auth_code
   api.put<MessageResponse>(`/accounts/${id}`, data)
 
 // ===== 同步操作 =====
-export const manualSync = (limit?: number) =>
-  api.post<MessageResponse>('/sync/manual', null, { params: { limit } })
+export const manualSync = (limit?: number, filterSynced: boolean = false) =>
+  api.post<MessageResponse>('/sync/manual', null, { params: { limit, filter_synced: filterSynced } })
 
-export const manualSyncAccount = (id: number, limit?: number) =>
-  api.post<MessageResponse>(`/sync/manual/${id}`, null, { params: { limit } })
+export const manualSyncAccount = (id: number, limit?: number, filterSynced: boolean = false) =>
+  api.post<MessageResponse>(`/sync/manual/${id}`, null, { params: { limit, filter_synced: filterSynced } })
 
 export const getSyncStatus = () =>
   api.get<SyncStatus>('/sync/status')
