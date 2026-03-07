@@ -385,15 +385,23 @@ def sync_account(user_id: str, account_id: int, days: int = None, limit: int = N
 
         # 将新邮件保存到缓存表
         if emails:
+            cached_count = 0
             for email_data in emails:
-                cache_entry = EmailCache(
-                    user_id=user_id,
-                    account_id=account_id,
-                    message_id=email_data["message_id"],
-                    subject=email_data.get("subject")
-                )
-                db.add(cache_entry)
-            logger.info(f"已缓存 {len(emails)} 封邮件到 EmailCache 表")
+                existing = db.query(EmailCache).filter(
+                    EmailCache.user_id == user_id,
+                    EmailCache.message_id == email_data["message_id"]
+                ).first()
+
+                if not existing:
+                    cache_entry = EmailCache(
+                        user_id=user_id,
+                        account_id=account_id,
+                        message_id=email_data["message_id"],
+                        subject=email_data.get("subject")
+                    )
+                    db.add(cache_entry)
+                    cached_count += 1
+            logger.info(f"已缓存 {cached_count} 封新邮件到 EmailCache 表")
 
         # 更新同步时间
         account.last_sync_time = datetime.utcnow()
