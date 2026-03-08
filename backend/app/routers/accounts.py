@@ -16,14 +16,21 @@ router = APIRouter(prefix="/api/accounts", tags=["账户管理"])
 
 
 def _clear_email_cache(db: Session, user_id: str, account_id: int) -> int:
-    """清理指定账户的邮件缓存记录，返回删除的记录数"""
-    deleted_count = db.query(EmailCache).filter(
-        EmailCache.user_id == user_id,
-        EmailCache.account_id == account_id
-    ).delete()
-    if deleted_count > 0:
-        logger.info(f"[user_id={user_id}] 清理账户 {account_id} 的缓存记录: {deleted_count} 条")
-    return deleted_count
+    """清理指定账户的邮件缓存记录，返回删除的记录数
+
+    清理失败时不抛出异常，仅记录错误日志，确保不影响账户操作。
+    """
+    try:
+        deleted_count = db.query(EmailCache).filter(
+            EmailCache.user_id == user_id,
+            EmailCache.account_id == account_id
+        ).delete()
+        if deleted_count > 0:
+            logger.info(f"[user_id={user_id}] 清理账户 {account_id} 的缓存记录: {deleted_count} 条")
+        return deleted_count
+    except Exception as e:
+        logger.error(f"[user_id={user_id}] 清理账户 {account_id} 缓存失败: {str(e)}")
+        return 0  # 返回 0 表示没有删除任何记录，但不抛出异常
 
 
 @router.post("", response_model=MessageResponse)

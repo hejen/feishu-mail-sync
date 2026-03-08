@@ -1,6 +1,7 @@
 """测试账户缓存清理功能"""
 import pytest
 import uuid
+from unittest.mock import MagicMock, patch
 from sqlalchemy.orm import Session
 from app.database import SessionLocal, EmailAccount, EmailCache, init_db
 
@@ -398,3 +399,164 @@ class TestEdgeCases:
 
         # 应该不报错，且删除数量为 0
         assert deleted_count == 0, "空数据库清理应该返回 0"
+
+
+class TestClearEmailCacheFunction:
+    """测试 _clear_email_cache 函数的错误处理"""
+
+    def test_clear_email_cache_handles_exception(self, db_session: Session):
+        """测试 _clear_email_cache 在异常情况下不抛出错误"""
+        from app.routers.accounts import _clear_email_cache
+
+        user_id = f"test-user-error-{uuid.uuid4().hex[:8]}"
+        account_id = 12345
+
+        # 使用 MagicMock 模拟会话，让 query 抛出异常
+        mock_session = MagicMock()
+        mock_session.query.side_effect = Exception("Database error")
+
+        # 应该不抛出异常，返回 0
+        result = _clear_email_cache(mock_session, user_id, account_id)
+        assert result == 0, "异常情况下应该返回 0"
+
+    def test_clear_email_cache_success(self, db_session: Session):
+        """测试 _clear_email_cache 正常工作"""
+        from app.routers.accounts import _clear_email_cache
+
+        user_id = f"test-user-success-{uuid.uuid4().hex[:8]}"
+
+        # 创建账户
+        account = EmailAccount(
+            user_id=user_id,
+            email=f"success-{uuid.uuid4().hex[:8]}@example.com",
+            provider="qq",
+            auth_code="encrypted",
+            imap_server="imap.qq.com",
+            imap_port=993
+        )
+        db_session.add(account)
+        db_session.commit()
+        db_session.refresh(account)
+
+        # 添加缓存
+        for i in range(3):
+            cache = EmailCache(
+                user_id=user_id,
+                account_id=account.id,
+                message_id=f"success-msg-{i}-{uuid.uuid4().hex[:8]}",
+                subject=f"Subject {i}"
+            )
+            db_session.add(cache)
+        db_session.commit()
+
+        # 调用清理函数
+        result = _clear_email_cache(db_session, user_id, account.id)
+
+        # 验证返回值
+        assert result == 3, "应该返回删除的记录数 3"
+
+        # 验证缓存已被清理
+        cache_count = db_session.query(EmailCache).filter(
+            EmailCache.user_id == user_id,
+            EmailCache.account_id == account.id
+        ).count()
+        assert cache_count == 0, "缓存应该被清理"
+
+
+class TestAPIIntegration:
+    """通过 API 端点测试缓存清理功能"""
+
+    def test_create_account_via_api_clears_cache(self, client, db_session: Session):
+        """通过 API 创建账户时测试缓存清理"""
+        user_id = f"test-user-api-create-{uuid.uuid4().hex[:8]}"
+        headers = {"X-User-Id": user_id}
+
+        # 先创建一个账户
+        response = client.post(
+            "/api/accounts",
+            headers=headers,
+            json={
+                "email": f"api-test-{uuid.uuid4().hex[:8]}@example.com",
+                "auth_code": "test_auth_code",
+                "provider": "qq"
+            }
+        )
+        assert response.status_code == 200, f"创建账户失败: {response.json()}"
+
+        # 获取账户 ID
+        accounts_response = client.get("/api/accounts", headers=headers)
+        accounts = accounts_response.json()
+        assert len(accounts) == 1
+        account_id = accounts[0]["id"]
+
+        # 手动添加缓存记录（模拟之前的同步数据）
+        for i in range(3):
+            cache = EmailCache(
+                user_id=user_id,
+                account_id=account_id,
+                message_id=f"api-msg-{i}-{uuid.uuid4().hex[:8]}",
+                subject=f"API Subject {i}"
+            )
+            db_session.add(cache)
+        db_session.commit()
+
+        # 验证缓存存在
+        cache_count = db_session.query(EmailCache).filter(
+            EmailCache.user_id == user_id,
+            EmailCache.account_id == account_id
+        ).count()
+        assert cache_count == 3, "应该有 3 条缓存记录"
+
+        # 删除账户
+        delete_response = client.delete(f"/api/accounts/{account_id}", headers=headers)
+        assert delete_response.status_code == 200, f"删除账户失败: {delete_response.json()}"
+
+        # 验证缓存已被清理
+        cache_count_after = db_session.query(EmailCache).filter(
+            EmailCache.user_id == user_id,
+            EmailCache.account_id == account_id
+        ).count()
+        assert cache_count_after == 0, "删除账户后缓存应该被清理"
+
+    def test_delete_account_via_api_clears_cache(self, client, db_session: Session):
+        """通过 API 删除账户时测试缓存清理"""
+        user_id = f"test-user-api-delete-{uuid.uuid4().hex[:8]}"
+        headers = {"X-User-Id": user_id}
+
+        # 创建账户
+        response = client.post(
+            "/api/accounts",
+            headers=headers,
+            json={
+                "email": f"api-delete-{uuid.uuid4().hex[:8]}@example.com",
+                "auth_code": "test_auth_code",
+                "provider": "163"
+            }
+        )
+        assert response.status_code == 200
+
+        # 获取账户 ID
+        accounts_response = client.get("/api/accounts", headers=headers)
+        account_id = accounts_response.json()[0]["id"]
+
+        # 添加缓存
+        for i in range(2):
+            cache = EmailCache(
+                user_id=user_id,
+                account_id=account_id,
+                message_id=f"delete-api-msg-{i}-{uuid.uuid4().hex[:8]}",
+                subject=f"Delete API Subject {i}"
+            )
+            db_session.add(cache)
+        db_session.commit()
+
+        # 删除账户
+        delete_response = client.delete(f"/api/accounts/{account_id}", headers=headers)
+        assert delete_response.status_code == 200
+
+        # 验证缓存被清理
+        cache_count = db_session.query(EmailCache).filter(
+            EmailCache.user_id == user_id,
+            EmailCache.account_id == account_id
+        ).count()
+        assert cache_count == 0, "删除账户后缓存应该被清理"
